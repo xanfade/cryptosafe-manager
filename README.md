@@ -1,0 +1,1 @@
+# cryptosafe-manager
