@@ -1,4 +1,3 @@
-# cryptosafe-manager
 
 # CryptoSafe Manager
 
