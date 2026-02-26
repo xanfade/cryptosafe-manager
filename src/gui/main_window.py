@@ -1,6 +1,9 @@
 import tkinter as tk
 from tkinter import ttk
 
+from src.gui.widgets.secure_table import SecureTable
+from src.gui.widgets.audit_log_viewer import AuditLogViewer
+
 
 class MainWindow(tk.Tk):
     def __init__(self):
@@ -26,7 +29,7 @@ class MainWindow(tk.Tk):
         menubar.add_cascade(label="Edit", menu=edit_menu)
 
         view_menu = tk.Menu(menubar, tearoff=0)
-        view_menu.add_command(label="Logs")
+        view_menu.add_command(label="Logs", command=lambda: AuditLogViewer(self))
         view_menu.add_command(label="Settings")
         menubar.add_cascade(label="View", menu=view_menu)
 
@@ -37,14 +40,9 @@ class MainWindow(tk.Tk):
         self.config(menu=menubar)
 
         # Table placeholder
-        columns = ("title", "username", "url", "updated")
-        table = ttk.Treeview(self, columns=columns, show="headings")
-        for c in columns:
-            table.heading(c, text=c.capitalize())
-            table.column(c, width=200)
-        table.pack(fill="both", expand=True, padx=10, pady=10)
-
-        table.insert("", "end", values=("Example", "user", "https://site", "—"))
+        self.table = SecureTable(self)
+        self.table.pack(fill="both", expand=True, padx=10, pady=10)
+        self.table.set_rows([("Example", "user", "https://site", "—")])
 
         # Status bar
         self.status = tk.StringVar(value="Locked | Clipboard: --")
@@ -111,4 +109,3 @@ class MainWindow(tk.Tk):
 
 if __name__ == "__main__":
     MainWindow().mainloop()
->>>>>>> 5916909 (Sprint 1: Добавил файл для шифр. до вставки)
