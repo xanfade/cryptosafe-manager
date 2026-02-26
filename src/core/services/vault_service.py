@@ -8,8 +8,10 @@ class VaultService:
         self.db = db
         self.crypto = AES256Placeholder()
 
-    def add_entry(self, title: str, username: str, password: str, url: str = "", notes: str = "", tags: str = "", key: bytes = b"demo-key"):
-        # DB-2: ...
+    def add_entry(self, title: str, username: str, password: str, url: str = "", notes: str = "", tags: str = "", key: bytes | None = None):
+        # SEC-1: ключ не хранится в коде, а должен быть передан снаружи
+        if not key:
+            raise ValueError("Ключ шифрования не задан (приложение должно быть разблокировано)")
         enc_password = self.crypto.encrypt(password.encode("utf-8"), key)
         enc_notes = self.crypto.encrypt(notes.encode("utf-8"), key) if notes else None
 
@@ -24,3 +26,4 @@ class VaultService:
                 (title, username, enc_password, url, enc_notes, now, now, tags),
             )
             conn.commit()
+
