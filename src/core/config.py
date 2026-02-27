@@ -1,12 +1,24 @@
-from src.core.config import ConfigManager
+import json
+import os
 
 
-def test_config_save_load(tmp_path):
-    path = tmp_path / "config.json"
-    cfg = ConfigManager(str(path))
-    cfg.set("db_path", "app.db")
-    cfg.save()
+class ConfigManager:
 
-    cfg2 = ConfigManager(str(path))
-    cfg2.load()
-    assert cfg2.get("db_path") == "app.db"
+    def __init__(self, path: str = "config.json"):
+        self.path = path
+        self.data = {}
+
+    def load(self) -> None:
+        if os.path.exists(self.path):
+            with open(self.path, "r", encoding="utf-8") as f:
+                self.data = json.load(f)
+
+    def save(self) -> None:
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(self.data, f, ensure_ascii=False, indent=2)
+
+    def get(self, key: str, default=None):
+        return self.data.get(key, default)
+
+    def set(self, key: str, value) -> None:
+        self.data[key] = value
