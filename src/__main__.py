@@ -1,24 +1,31 @@
+from src.core.config import ConfigManager
+from src.gui.setup_wizard import SetupWizard
 from src.gui.main_window import MainWindow
-from src.core.events import EventBus
-from src.database.db import Database
-from src.core.audit_logger import AuditLogger
 
 
 def main():
-    # База (пока просто app.db рядом с проектом)
-    db = Database("app.db")
-    db.migrate()
+    cfg = ConfigManager("config.json")
+    cfg.load()
 
-    # Шина событий
-    bus = EventBus()
+    if not cfg.get("db_path"):
+        root = MainWindow()
+        root.withdraw()
 
-    # Заглушка аудита подписывается на события
-    audit = AuditLogger(db)
-    audit.subscribe(bus)
+        wiz = SetupWizard(root)
+        root.wait_window(wiz)
 
-    # Запуск GUI (позже прокинем bus/db внутрь окна)
-    app = MainWindow()
-    app.mainloop()
+        if not wiz.result:
+            root.destroy()
+            return
+
+        # сохраняем только путь БД и заглушку параметров
+        cfg.set("db_path", wiz.result["db_path"])
+        cfg.set("kdf_iterations", wiz.result["iterations"])
+        cfg.save()
+
+        root.destroy()
+
+    MainWindow().mainloop()
 
 
 if __name__ == "__main__":
