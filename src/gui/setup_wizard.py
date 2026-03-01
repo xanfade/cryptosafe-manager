@@ -11,7 +11,7 @@ class SetupWizard(tk.Toplevel):
         self.result = None
 
         self.title("Создание мастер-пароля")
-        self.geometry("400x250")
+        self.geometry("400x300")
         self.resizable(False, False)
 
         # Мастер-пароль
@@ -75,3 +75,4 @@ class SetupWizard(tk.Toplevel):
         }
 
         self.destroy()
+
