@@ -1,114 +1,77 @@
-import os
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox
 
 
 class SetupWizard(tk.Toplevel):
-    
 
-    def __init__(self, master=None):
-        super().__init__(master)
-        self.title("Первоначальная настройка")
-        self.geometry("520x340")
+
+    def __init__(self, parent):
+        super().__init__(parent)
+
+        self.result = None
+
+        self.title("Создание мастер-пароля")
+        self.geometry("400x250")
         self.resizable(False, False)
 
-        # Результат работы мастера (если None — значит отмена)
-        self.result = None
+        # Мастер-пароль
+        tk.Label(self, text="Мастер-пароль").pack(pady=5)
+        self.pass1 = tk.Entry(self, show="*")
+        self.pass1.pack(fill="x", padx=20)
 
-        # Переменные
-        self.db_path_var = tk.StringVar(value=os.path.abspath("app.db"))
-        self.iter_var = tk.StringVar(value="100000")  # заглушка параметра KDF
+        tk.Label(self, text="Подтверждение пароля").pack(pady=5)
+        self.pass2 = tk.Entry(self, show="*")
+        self.pass2.pack(fill="x", padx=20)
 
-        # UI
-        wrapper = ttk.Frame(self, padding=16)
-        wrapper.pack(fill="both", expand=True)
+        # Путь ДБ
+        tk.Label(self, text="Расположение базы данных").pack(pady=5)
 
-        ttk.Label(wrapper, text="Мастер первоначальной настройки", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        frame = tk.Frame(self)
+        frame.pack(fill="x", padx=20)
 
-        # --- Путь к БД ---
-        ttk.Label(wrapper, text="Расположение базы данных:").pack(anchor="w", pady=(14, 4))
-        row_db = ttk.Frame(wrapper)
-        row_db.pack(fill="x")
+        self.db_path = tk.StringVar(value="app.db")
+        tk.Entry(frame, textvariable=self.db_path).pack(
+            side="left", fill="x", expand=True
+        )
 
-        ttk.Entry(row_db, textvariable=self.db_path_var).pack(side="left", fill="x", expand=True)
-        ttk.Button(row_db, text="Выбрать…", command=self.pick_db_path).pack(side="left", padx=(8, 0))
+        tk.Button(frame, text="Выбрать", command=self.choose_db).pack(side="right")
 
-        # --- Пароль ---
-        ttk.Label(wrapper, text="Мастер-пароль:").pack(anchor="w", pady=(14, 4))
-        self.pass1 = ttk.Entry(wrapper, show="*")
-        self.pass1.pack(fill="x")
+        # Итерации
+        tk.Label(self, text="Итерации").pack(pady=5)
+        self.iterations = tk.IntVar(value=100000)
+        tk.Entry(self, textvariable=self.iterations).pack(fill="x", padx=20)
 
-        ttk.Label(wrapper, text="Подтверждение пароля:").pack(anchor="w", pady=(10, 4))
-        self.pass2 = ttk.Entry(wrapper, show="*")
-        self.pass2.pack(fill="x")
 
-        # --- Параметры шифрования (заглушка) ---
-        ttk.Label(wrapper, text="Настройки шифрования (заглушка):").pack(anchor="w", pady=(14, 4))
-        row_kdf = ttk.Frame(wrapper)
-        row_kdf.pack(fill="x")
-        ttk.Label(row_kdf, text="Iterations:").pack(side="left")
-        ttk.Entry(row_kdf, textvariable=self.iter_var, width=12).pack(side="left", padx=(8, 0))
+        #Создание кнопки
+        tk.Button(self, text="Создать", command=self.finish).pack(pady=15)
 
-        ttk.Label(
-            wrapper,
-            text="(здесь будут реальные параметры KDF/шифрования)",
-            foreground="gray"
-        ).pack(anchor="w", pady=(4, 0))
+        self.grab_set()      # блокирует родительское окно
+        self.focus_force()
 
-        # --- Кнопки ---
-        btns = ttk.Frame(wrapper)
-        btns.pack(fill="x", pady=(18, 0))
-
-        ttk.Button(btns, text="Отмена", command=self.cancel).pack(side="right")
-        ttk.Button(btns, text="Создать", command=self.finish).pack(side="right", padx=(0, 8))
-
-        self.protocol("WM_DELETE_WINDOW", self.cancel)
-
-        # Делаем окно модальным
-        self.transient(master)
-        self.grab_set()
-
-    def pick_db_path(self):
+    def choose_db(self):
         path = filedialog.asksaveasfilename(
-            title="Выбор файла базы данных",
             defaultextension=".db",
-            filetypes=[("SQLite DB", "*.db"), ("All files", "*.*")],
-            initialfile="app.db",
+            filetypes=[("SQLite DB", "*.db")]
         )
         if path:
-            self.db_path_var.set(path)
-
-    def cancel(self):
-        self.result = None
-        self.destroy()
+            self.db_path.set(path)
 
     def finish(self):
-        # --- Валидация (SEC-2 минимум) ---
-        db_path = (self.db_path_var.get() or "").strip()
-        p1 = (self.pass1.get() or "").strip()
-        p2 = (self.pass2.get() or "").strip()
-        it = (self.iter_var.get() or "").strip()
-
-        if not db_path:
-            messagebox.showerror("Ошибка", "Укажите путь к базе данных.")
+        if self.pass1.get() != self.pass2.get():
+            messagebox.showerror("Error", "Пароли не совпадают")
             return
 
-        if not p1 or not p2:
-            messagebox.showerror("Ошибка", "Пароль и подтверждение обязательны.")
+        if len(self.pass1.get())<8:
+            messagebox.showerror("Error", "Пароль меньше 8 символов")
             return
 
-        if p1 != p2:
-            messagebox.showerror("Ошибка", "Пароли не совпадают.")
+        if not self.pass1.get():
+            messagebox.showerror("Error", "Неверный пароль")
             return
 
-        if not it.isdigit() or int(it) <= 0:
-            messagebox.showerror("Ошибка", "Iterations должны быть положительным числом.")
-            return
-
-        # Готово: возвращаем результат наверх в __main__.py
         self.result = {
-            "db_path": db_path,
-            "master_password": p1,   # Важно: дальше мы НЕ сохраняем пароль в конфиг!
-            "iterations": int(it),
+            "db_path": self.db_path.get(),
+            "iterations": self.iterations.get(),
         }
+
         self.destroy()
