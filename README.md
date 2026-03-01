@@ -6,7 +6,7 @@ CryptoSafe Manager — учебный/проектный менеджер сек
 
 ---
 
-## Vision (видение проекта)
+## Видение проекта
 
 Приложение предоставляет:
 - Защищённое хранилище записей (логин/пароль/URL/заметки/теги)
@@ -29,25 +29,25 @@ CryptoSafe Manager — учебный/проектный менеджер сек
 - Тестовая инфраструктура (pytest)
 
 ### Sprint 2
-- 
+...
 
 ### Sprint 3 
-- 
+...
 
 ### Sprint 4
--
+...
 
 ### Sprint 5
-
+...
 
 ### Sprint 6
-
+...
 
 ### Sprint 7
-ки
+...
 
 ### Sprint 8
-
+...
 Схема потока:
 ┌──────────────────────┐
 │        GUI           │  (View/Controllers)
@@ -66,20 +66,11 @@ CryptoSafe Manager — учебный/проектный менеджер сек
 │ db.py, models.py     │
 └──────────────────────┘
 
-Repository structure
-cryptosafe-manager/
-├── src/
-│   ├── core/
-│   ├── database/
-│   └── gui/
-├── tests/
-├── requirements.txt
-└── README.md
 
-
----
 
 ## Setup (установка и запуск)
+
+-открыть файл __main__.py
 
 ### Требования
 - Python 3.12+ (рекомендуется)
