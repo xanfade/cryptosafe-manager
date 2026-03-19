@@ -42,3 +42,15 @@ CREATE TABLE IF NOT EXISTS key_store (
 );
 CREATE INDEX IF NOT EXISTS idx_keystore_type ON key_store(key_type);
 """
+SCHEMA_V2 = """
+CREATE TABLE IF NOT EXISTS key_store_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key_type TEXT NOT NULL,
+    key_data BLOB NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_keystore_type_version
+ON key_store_new(key_type, version);
+"""
