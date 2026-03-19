@@ -9,4 +9,4 @@ def test_first_run_flow_creates_db(tmp_path):
     db = Database(str(db_path))
     with db.connection() as c:
         v = c.execute("PRAGMA user_version;").fetchone()[0]
-        assert v == 1
+        assert v == 2
