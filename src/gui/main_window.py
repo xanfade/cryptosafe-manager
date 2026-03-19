@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-
+from src.gui.password_change_dialog import PasswordChangeDialog
 from src.gui.widgets.audit_log_viewer import AuditLogViewer
 
 
@@ -184,8 +184,12 @@ class EntryDialog(tk.Toplevel):
 
 
 class MainWindow(tk.Tk):
-    def __init__(self):
+    def __init__(self, db, key_manager, auth_service):
         super().__init__()
+
+        self.db = db
+        self.key_manager = key_manager
+        self.auth_service = auth_service
         self.title("CryptoSafe Manager")
         self.geometry("1100x620")
         self.minsize(900, 540)
@@ -306,6 +310,17 @@ class MainWindow(tk.Tk):
             activebackground="#3a3a3a",
             activeforeground="#ffffff"
         )
+        security_menu = tk.Menu(
+            menubar,
+            tearoff=0,
+            bg="#2b2b2b",
+            fg="#ffffff",
+            activebackground="#3a3a3a",
+            activeforeground="#ffffff"
+        )
+        security_menu.add_command(label="Сменить мастер-пароль", command=self.open_password_change_dialog)
+        menubar.add_cascade(label="Security", menu=security_menu)
+
         view_menu.add_command(label="Logs", command=lambda: AuditLogViewer(self))
         view_menu.add_command(label="Settings")
         menubar.add_cascade(label="View", menu=view_menu)
@@ -486,6 +501,14 @@ class MainWindow(tk.Tk):
             del self.rows[index]
             self.refresh_table()
             self.set_status("Запись удалена")
+    def open_password_change_dialog(self):
+        dialog = PasswordChangeDialog(
+            self,
+            db=self.db,
+            key_manager=self.key_manager,
+            auth_service=self.auth_service,
+        )
+        self.wait_window(dialog)
 
 
 if __name__ == "__main__":

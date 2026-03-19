@@ -52,7 +52,11 @@ def main():
 
     root.destroy()
 
-    app = MainWindow()
+    app = MainWindow(
+        db=db,
+        key_manager=key_manager,
+        auth_service=auth_service,
+    )
     app.mainloop()
 
 

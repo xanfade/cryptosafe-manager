@@ -89,3 +89,15 @@ class KeyManager:
 
     def clear_cache(self) -> None:
         self.cache.clear()
+    def get_next_version(self, conn=None) -> int:
+        if conn is None:
+            with self.db.connection() as local_conn:
+                row = local_conn.execute(
+                    "SELECT COALESCE(MAX(version), 0) FROM key_store"
+                ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(version), 0) FROM key_store"
+            ).fetchone()
+
+        return int(row[0]) + 1
