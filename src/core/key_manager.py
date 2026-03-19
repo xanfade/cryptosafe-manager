@@ -1,41 +1,91 @@
-import hashlib
-import os
-from dataclasses import dataclass
-from typing import Optional
+from __future__ import annotations
 
+from datetime import datetime, timezone
 
-@dataclass
-class KeyParams:
-    # Заглушка параметров KDF для Спринта 2 (PBKDF2/Argon2 и т.д.)
-    iterations: int = 100_000
+from src.core.crypto.key_derivation import (
+    Argon2Params,
+    PBKDF2Params,
+    generate_salt,
+    derive_auth_hash,
+)
+from src.core.crypto.key_storage import SecureKeyCache
+from src.database.db import Database
 
 
 class KeyManager:
-    """
-    Заглушка для Спринта 1.
+    def __init__(self, db: Database, cache_ttl_sec: int = 3600):
+        self.db = db
+        self.cache = SecureKeyCache(ttl_seconds=cache_ttl_sec)
 
-    """
+    def _insert_key_record(self, key_type: str, key_data: bytes, version: int = 1) -> None:
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self.db.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO key_store(key_type, key_data, version, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (key_type, key_data, version, now),
+            )
+            conn.commit()
 
-    def __init__(self, params: Optional[KeyParams] = None):
-        self.params = params or KeyParams()
+    def _get_latest_key_record(self, key_type: str):
+        with self.db.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT key_data, version, created_at
+                FROM key_store
+                WHERE key_type = ?
+                ORDER BY version DESC, id DESC
+                LIMIT 1
+                """,
+                (key_type,),
+            ).fetchone()
+        return row
 
-    def derive_key(self, password: str, salt: bytes) -> bytes:
-        # Заглушка KDF: sha256( password || salt )
-        # В Спринте 2 заменим на нормальную KDF (PBKDF2/Argon2) и будем хранить параметры в key_store.
-        if not isinstance(password, str) or not isinstance(salt, (bytes, bytearray)):
-            raise TypeError("password должен быть str, salt должен быть bytes/bytearray")
+    def initialize_master_password(self, password: str) -> None:
+        argon2_params = Argon2Params()
+        pbkdf2_params = PBKDF2Params()
 
-        data = password.encode("utf-8") + bytes(salt)
-        return hashlib.sha256(data).digest()
+        auth_salt = generate_salt(argon2_params.salt_len)
+        enc_salt = generate_salt(pbkdf2_params.salt_len)
+        auth_hash = derive_auth_hash(password, auth_salt, argon2_params)
 
-    def store_key(self, *args, **kwargs):
-        # Спринт 2: сохранять соль/хэш/параметры в таблицу key_store
-        raise NotImplementedError("store_key будет реализован в Спринте 2")
+        self._insert_key_record("auth_hash", auth_hash, 1)
+        self._insert_key_record("auth_salt", auth_salt, 1)
+        self._insert_key_record("enc_salt", enc_salt, 1)
+        self._insert_key_record("argon2_params", argon2_params.to_json(), 1)
+        self._insert_key_record("pbkdf2_params", pbkdf2_params.to_json(), 1)
 
-    def load_key(self, *args, **kwargs):
-        # Спринт 2: загружать соль/хэш/параметры из таблицы key_store
-        raise NotImplementedError("load_key будет реализован в Спринте 2")
+    def is_initialized(self) -> bool:
+        return self._get_latest_key_record("auth_hash") is not None
 
-    def generate_salt(self, n: int = 16) -> bytes:
-        # Генерация соли (может пригодиться уже в Спринте 1 при первичной настройке)
-        return os.urandom(n)
+    def load_bundle(self) -> dict:
+        auth_hash = self._get_latest_key_record("auth_hash")
+        auth_salt = self._get_latest_key_record("auth_salt")
+        enc_salt = self._get_latest_key_record("enc_salt")
+        argon2_params = self._get_latest_key_record("argon2_params")
+        pbkdf2_params = self._get_latest_key_record("pbkdf2_params")
+
+        if not all([auth_hash, auth_salt, enc_salt, argon2_params, pbkdf2_params]):
+            raise RuntimeError("Хранилище ключей не инициализировано полностью")
+
+        return {
+            "auth_hash": auth_hash[0],
+            "auth_salt": auth_salt[0],
+            "enc_salt": enc_salt[0],
+            "argon2_params": Argon2Params.from_json(argon2_params[0]),
+            "pbkdf2_params": PBKDF2Params.from_json(pbkdf2_params[0]),
+        }
+
+    def cache_encryption_key(self, key: bytes) -> None:
+        self.cache.put(key)
+
+    def get_encryption_key(self) -> bytes | None:
+        return self.cache.get()
+
+    def touch_cache(self) -> None:
+        self.cache.touch()
+
+    def clear_cache(self) -> None:
+        self.cache.clear()
