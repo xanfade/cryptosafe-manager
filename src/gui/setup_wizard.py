@@ -202,41 +202,32 @@ class SetupWizard(tk.Toplevel):
             self.db_path.set(path)
 
     def finish(self):
-        password1 = self.pass1_var.get()
-        password2 = self.pass2_var.get()
+        password = self.pass1_var.get().strip()
+        confirm_password = self.pass2_var.get().strip()
         db_path = self.db_path.get().strip()
-        iterations_text = self.iterations.get().strip()
 
-        if not password1:
-            messagebox.showerror("Ошибка", "Введите мастер-пароль", parent=self)
+        if not password or not confirm_password:
+            messagebox.showerror("Ошибка", "Заполните оба поля пароля")
             return
 
-        if password1 != password2:
-            messagebox.showerror("Ошибка", "Пароли не совпадают", parent=self)
-            return
-
-        if len(password1) < 8:
-            messagebox.showerror("Ошибка", "Пароль должен быть не меньше 8 символов", parent=self)
+        if password != confirm_password:
+            messagebox.showerror("Ошибка", "Пароли не совпадают")
             return
 
         if not db_path:
-            messagebox.showerror("Ошибка", "Укажите путь к базе данных", parent=self)
+            messagebox.showerror("Ошибка", "Укажите путь к базе данных")
             return
 
         try:
-            iterations = int(iterations_text)
-        except ValueError:
-            messagebox.showerror("Ошибка", "Итерации должны быть числом", parent=self)
-            return
-
-        if iterations < 10000:
-            messagebox.showerror("Ошибка", "Количество итераций должно быть не меньше 10000", parent=self)
+            from src.core.crypto.authentication import validate_password_strength
+            validate_password_strength(password)
+        except Exception as e:
+            messagebox.showerror("Ошибка", str(e))
             return
 
         self.result = {
-            "master_password": password1,
             "db_path": db_path,
-            "iterations": iterations,
+            "master_password": password,
         }
 
         self.destroy()
