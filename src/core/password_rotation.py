@@ -30,7 +30,6 @@ class PasswordRotationService:
     def __init__(self, db, key_manager):
         self.db = db
         self.key_manager = key_manager
-
         self._pause_event = threading.Event()
         self._pause_event.set()
         self._cancel_requested = False
@@ -49,6 +48,38 @@ class PasswordRotationService:
         self._pause_event.wait()
         if self._cancel_requested:
             raise RuntimeError("Операция отменена пользователем")
+
+    def _decrypt_or_legacy_plaintext(self, old_enc_key: bytes, value) -> str:
+        """
+        Поддержка двух форматов:
+        1) нормальный XOR-шифротекст
+        2) старые legacy-данные, сохранённые как обычные utf-8 bytes
+        """
+        if value is None:
+            return ""
+
+        if isinstance(value, str):
+            return value
+
+        if not isinstance(value, (bytes, bytearray)):
+            return str(value)
+
+        raw = bytes(value)
+        if not raw:
+            return ""
+
+        # Сначала пробуем как нормальный шифротекст
+        try:
+            return decrypt_record(old_enc_key, raw)
+        except UnicodeDecodeError:
+            # Если это не шифротекст, пробуем как старые plain utf-8 bytes
+            try:
+                return raw.decode("utf-8")
+            except UnicodeDecodeError:
+                raise ValueError(
+                    "Обнаружены повреждённые или несовместимые данные в vault_entries. "
+                    "Невозможно безопасно выполнить ротацию."
+                )
 
     def rotate_password(
         self,
@@ -89,7 +120,6 @@ class PasswordRotationService:
             new_auth_salt,
             new_argon2_params,
         )
-
         new_enc_key = derive_encryption_key(
             password=new_password,
             salt=new_enc_salt,
@@ -100,7 +130,6 @@ class PasswordRotationService:
 
         with self.db.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-
             try:
                 rows = conn.execute(
                     """
@@ -130,23 +159,11 @@ class PasswordRotationService:
 
                     entry_id, encrypted_password, notes = row
 
-                    plain_password = (
-                        decrypt_record(old_enc_key, encrypted_password)
-                        if encrypted_password else ""
-                    )
-                    plain_notes = (
-                        decrypt_record(old_enc_key, notes)
-                        if notes else ""
-                    )
+                    plain_password = self._decrypt_or_legacy_plaintext(old_enc_key, encrypted_password)
+                    plain_notes = self._decrypt_or_legacy_plaintext(old_enc_key, notes)
 
-                    new_encrypted_password = (
-                        encrypt_record(new_enc_key, plain_password)
-                        if plain_password else b""
-                    )
-                    new_encrypted_notes = (
-                        encrypt_record(new_enc_key, plain_notes)
-                        if plain_notes else b""
-                    )
+                    new_encrypted_password = encrypt_record(new_enc_key, plain_password) if plain_password else b""
+                    new_encrypted_notes = encrypt_record(new_enc_key, plain_notes) if plain_notes else b""
 
                     updated_rows.append(
                         (

@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from src.gui.password_change_dialog import PasswordChangeDialog
+from src.database.db import Database
 from src.gui.widgets.audit_log_viewer import AuditLogViewer
 
 
@@ -14,7 +15,6 @@ class EntryDialog(tk.Toplevel):
         self.geometry("640x520")
         self.resizable(False, False)
         self.configure(bg="#1e1e1e")
-
         self.transient(parent)
         self.grab_set()
 
@@ -148,18 +148,15 @@ class EntryDialog(tk.Toplevel):
 
     def center_window(self):
         self.update_idletasks()
-
         parent_x = self.parent.winfo_rootx()
         parent_y = self.parent.winfo_rooty()
         parent_w = self.parent.winfo_width()
         parent_h = self.parent.winfo_height()
-
         win_w = self.winfo_width()
         win_h = self.winfo_height()
 
         x = parent_x + (parent_w // 2) - (win_w // 2)
         y = parent_y + (parent_h // 2) - (win_h // 2)
-
         self.geometry(f"+{x}+{y}")
 
     def on_save(self):
@@ -184,16 +181,16 @@ class EntryDialog(tk.Toplevel):
 
 
 class MainWindow(tk.Tk):
-    def __init__(self, db, key_manager, auth_service):
+    def __init__(self, db, key_manager=None, auth_service=None):
         super().__init__()
-
-        self.db = db
-        self.key_manager = key_manager
-        self.auth_service = auth_service
         self.title("CryptoSafe Manager")
         self.geometry("1100x620")
         self.minsize(900, 540)
         self.configure(bg="#1e1e1e")
+
+        self.db = db
+        self.key_manager = key_manager
+        self.auth_service = auth_service
 
         self.rows = []
 
@@ -202,12 +199,13 @@ class MainWindow(tk.Tk):
         self.create_toolbar()
         self.create_table()
         self.create_statusbar()
-
+        self.load_entries()
         self.set_status("Готово")
+
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def setup_styles(self):
         style = ttk.Style(self)
-
         try:
             style.theme_use("clam")
         except tk.TclError:
@@ -237,10 +235,7 @@ class MainWindow(tk.Tk):
             relief="flat",
             borderwidth=0
         )
-        style.map(
-            "Treeview.Heading",
-            background=[("active", "#3a3a3a")]
-        )
+        style.map("Treeview.Heading", background=[("active", "#3a3a3a")])
 
         style.configure(
             "Dark.TButton",
@@ -286,7 +281,7 @@ class MainWindow(tk.Tk):
         file_menu.add_command(label="Open")
         file_menu.add_command(label="Backup")
         file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.destroy)
+        file_menu.add_command(label="Exit", command=self.on_close if hasattr(self, "on_close") else self.destroy)
         menubar.add_cascade(label="File", menu=file_menu)
 
         edit_menu = tk.Menu(
@@ -302,14 +297,6 @@ class MainWindow(tk.Tk):
         edit_menu.add_command(label="Удалить", command=self.delete_record)
         menubar.add_cascade(label="Edit", menu=edit_menu)
 
-        view_menu = tk.Menu(
-            menubar,
-            tearoff=0,
-            bg="#2b2b2b",
-            fg="#ffffff",
-            activebackground="#3a3a3a",
-            activeforeground="#ffffff"
-        )
         security_menu = tk.Menu(
             menubar,
             tearoff=0,
@@ -321,6 +308,14 @@ class MainWindow(tk.Tk):
         security_menu.add_command(label="Сменить мастер-пароль", command=self.open_password_change_dialog)
         menubar.add_cascade(label="Security", menu=security_menu)
 
+        view_menu = tk.Menu(
+            menubar,
+            tearoff=0,
+            bg="#2b2b2b",
+            fg="#ffffff",
+            activebackground="#3a3a3a",
+            activeforeground="#ffffff"
+        )
         view_menu.add_command(label="Logs", command=lambda: AuditLogViewer(self))
         view_menu.add_command(label="Settings")
         menubar.add_cascade(label="View", menu=view_menu)
@@ -375,7 +370,6 @@ class MainWindow(tk.Tk):
         table_frame.pack(fill="both", expand=True)
 
         columns = ("title", "username", "password", "url", "notes")
-
         self.table = ttk.Treeview(
             table_frame,
             columns=columns,
@@ -406,18 +400,8 @@ class MainWindow(tk.Tk):
 
         self.table.bind("<Double-1>", lambda event: self.edit_record())
 
-        self.rows.append({
-            "title": "Example",
-            "username": "user",
-            "password": "123456",
-            "url": "https://site.com",
-            "notes": "Тестовая запись"
-        })
-        self.refresh_table()
-
     def create_statusbar(self):
         self.status = tk.StringVar(value="Готово")
-
         statusbar = tk.Label(
             self,
             textvariable=self.status,
@@ -433,15 +417,19 @@ class MainWindow(tk.Tk):
     def set_status(self, text):
         self.status.set(text)
 
+    def load_entries(self):
+        self.rows = self.db.get_all_entries()
+        self.refresh_table()
+
     def refresh_table(self):
         for item in self.table.get_children():
             self.table.delete(item)
 
-        for index, row in enumerate(self.rows):
+        for row in self.rows:
             self.table.insert(
                 "",
                 "end",
-                iid=str(index),
+                iid=str(row["id"]),
                 values=(
                     row["title"],
                     row["username"],
@@ -451,44 +439,73 @@ class MainWindow(tk.Tk):
                 )
             )
 
-    def get_selected_index(self):
+    def open_password_change_dialog(self):
+        dialog = PasswordChangeDialog(
+            self,
+            db=self.db,
+            key_manager=self.key_manager,
+            auth_service=self.auth_service,
+        )
+        self.wait_window(dialog)
+
+    def get_selected_id(self):
         selected = self.table.selection()
         if not selected:
             return None
         return int(selected[0])
+
+    def get_row_by_id(self, entry_id: int):
+        for row in self.rows:
+            if row["id"] == entry_id:
+                return row
+        return None
 
     def add_record(self):
         dialog = EntryDialog(self, title="Добавить запись")
         self.wait_window(dialog)
 
         if dialog.result:
-            self.rows.append(dialog.result)
-            self.refresh_table()
+            self.db.add_entry(
+                title=dialog.result["title"],
+                username=dialog.result["username"],
+                password=dialog.result["password"],
+                url=dialog.result["url"],
+                notes=dialog.result["notes"]
+            )
+            self.load_entries()
             self.set_status("Запись добавлена")
 
     def edit_record(self):
-        index = self.get_selected_index()
-        if index is None:
+        entry_id = self.get_selected_id()
+        if entry_id is None:
             messagebox.showwarning("Внимание", "Сначала выберите запись.", parent=self)
             return
 
-        dialog = EntryDialog(
-            self,
-            title="Изменить запись",
-            data=self.rows[index]
-        )
+        row = self.get_row_by_id(entry_id)
+        if row is None:
+            messagebox.showerror("Ошибка", "Запись не найдена.", parent=self)
+            return
+
+        dialog = EntryDialog(self, title="Изменить запись", data=row)
         self.wait_window(dialog)
 
         if dialog.result:
-            self.rows[index] = dialog.result
-            self.refresh_table()
-            self.table.selection_set(str(index))
-            self.table.focus(str(index))
+            self.db.update_entry(
+                entry_id=entry_id,
+                title=dialog.result["title"],
+                username=dialog.result["username"],
+                password=dialog.result["password"],
+                url=dialog.result["url"],
+                notes=dialog.result["notes"]
+            )
+            self.load_entries()
+            self.table.selection_set(str(entry_id))
+            self.table.focus(str(entry_id))
             self.set_status("Запись изменена")
 
     def delete_record(self):
-        index = self.get_selected_index()
-        if index is None:
+        entry_id = self.get_selected_id()
+        if entry_id is None:
             messagebox.showwarning("Внимание", "Сначала выберите запись.", parent=self)
             return
 
@@ -498,17 +515,14 @@ class MainWindow(tk.Tk):
             parent=self
         )
         if confirm:
-            del self.rows[index]
-            self.refresh_table()
+            self.db.delete_entry(entry_id)
+            self.load_entries()
             self.set_status("Запись удалена")
-    def open_password_change_dialog(self):
-        dialog = PasswordChangeDialog(
-            self,
-            db=self.db,
-            key_manager=self.key_manager,
-            auth_service=self.auth_service,
-        )
-        self.wait_window(dialog)
+
+    def on_close(self):
+        if hasattr(self.db, "close_thread_connection"):
+            self.db.close_thread_connection()
+        self.destroy()
 
 
 if __name__ == "__main__":
