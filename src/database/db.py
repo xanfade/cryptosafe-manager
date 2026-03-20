@@ -30,9 +30,9 @@ class Database:
     def migrate(self):
         with self.connection() as conn:
             v = conn.execute("PRAGMA user_version;").fetchone()[0]
-            if v < 1:
+            if v < 2:
                 conn.executescript(SCHEMA_V1)
-                conn.execute("PRAGMA user_version=1;")
+                conn.execute("PRAGMA user_version=2;")
                 conn.commit()
 
     def close_thread_connection(self):
