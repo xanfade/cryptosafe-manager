@@ -13,9 +13,19 @@ from src.database.db import Database
 
 
 class KeyManager:
-    def __init__(self, db: Database, cache_ttl_sec: int = 3600):
+    def __init__(
+        self,
+        db: Database,
+        cache_ttl_sec: int = 3600,
+        clear_on_focus_loss: bool = True,
+        clear_on_minimize: bool = True,
+    ):
         self.db = db
-        self.cache = SecureKeyCache(ttl_seconds=cache_ttl_sec)
+        self.cache = SecureKeyCache(
+            ttl_seconds=cache_ttl_sec,
+            clear_on_focus_loss=clear_on_focus_loss,
+            clear_on_minimize=clear_on_minimize,
+        )
 
     def _insert_key_record(self, key_type: str, key_data: bytes, version: int = 1) -> None:
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -41,7 +51,7 @@ class KeyManager:
                 """,
                 (key_type,),
             ).fetchone()
-        return row
+            return row
 
     def initialize_master_password(self, password: str) -> None:
         argon2_params = Argon2Params()
@@ -49,6 +59,7 @@ class KeyManager:
 
         auth_salt = generate_salt(argon2_params.salt_len)
         enc_salt = generate_salt(pbkdf2_params.salt_len)
+
         auth_hash = derive_auth_hash(password, auth_salt, argon2_params)
 
         self._insert_key_record("auth_hash", auth_hash, 1)
@@ -84,11 +95,30 @@ class KeyManager:
     def get_encryption_key(self) -> bytes | None:
         return self.cache.get()
 
+    def has_cached_key(self) -> bool:
+        return self.cache.has_key()
+
     def touch_cache(self) -> None:
         self.cache.touch()
 
     def clear_cache(self) -> None:
         self.cache.clear()
+
+    def on_app_focus_lost(self) -> None:
+        self.cache.on_app_focus_lost()
+
+    def on_app_focus_gained(self) -> None:
+        self.cache.on_app_focus_gained()
+
+    def on_app_minimized(self) -> None:
+        self.cache.on_app_minimized()
+
+    def on_app_restored(self) -> None:
+        self.cache.on_app_restored()
+
+    def is_cache_expired(self) -> bool:
+        return self.cache.is_expired()
+
     def get_next_version(self, conn=None) -> int:
         if conn is None:
             with self.db.connection() as local_conn:

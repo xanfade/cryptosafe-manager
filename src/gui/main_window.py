@@ -181,7 +181,7 @@ class EntryDialog(tk.Toplevel):
 
 
 class MainWindow(tk.Tk):
-    def __init__(self, db, key_manager=None, auth_service=None):
+    def __init__(self, db=None, key_manager=None, auth_service=None):
         super().__init__()
         self.title("CryptoSafe Manager")
         self.geometry("1100x620")
@@ -191,6 +191,10 @@ class MainWindow(tk.Tk):
         self.db = db
         self.key_manager = key_manager
         self.auth_service = auth_service
+
+        self._focus_out_job = None
+        self._poll_job = None
+        self._is_minimized = False
 
         self.rows = []
 
@@ -202,7 +206,18 @@ class MainWindow(tk.Tk):
         self.load_entries()
         self.set_status("Готово")
 
+
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        self.bind("<FocusIn>", self._on_focus_in)
+        self.bind("<FocusOut>", self._on_focus_out)
+        self.bind("<Unmap>", self._on_unmap)
+        self.bind("<Map>", self._on_map)
+        self.bind_all("<Any-KeyPress>", self._on_user_activity)
+        self.bind_all("<Any-ButtonPress>", self._on_user_activity)
+        self.bind_all("<Motion>", self._on_user_activity)
+
+        self._start_security_poll()
 
     def setup_styles(self):
         style = ttk.Style(self)
@@ -523,6 +538,65 @@ class MainWindow(tk.Tk):
         if hasattr(self.db, "close_thread_connection"):
             self.db.close_thread_connection()
         self.destroy()
+
+    def _on_user_activity(self, event=None):
+        if self.auth_service:
+            self.auth_service.touch()
+
+    def _on_focus_out(self, event=None):
+        if not self.auth_service:
+            return
+
+        if self._focus_out_job is not None:
+            self.after_cancel(self._focus_out_job)
+
+        self._focus_out_job = self.after(150, self._apply_focus_out)
+
+    def _apply_focus_out(self):
+        self._focus_out_job = None
+        if self.auth_service:
+            self.auth_service.on_app_focus_lost()
+            self.set_status("Ключ очищен: приложение потеряло фокус")
+
+    def _on_focus_in(self, event=None):
+        if self._focus_out_job is not None:
+            self.after_cancel(self._focus_out_job)
+            self._focus_out_job = None
+
+        if self.auth_service:
+            self.auth_service.on_app_focus_gained()
+            self.set_status("Приложение активно")
+
+    def _on_unmap(self, event=None):
+        if self.state() == "iconic":
+            self._is_minimized = True
+            if self.auth_service:
+                self.auth_service.on_app_minimized()
+                self.set_status("Ключ очищен: приложение свёрнуто")
+
+    def _on_map(self, event=None):
+        if self._is_minimized:
+            self._is_minimized = False
+            if self.auth_service:
+                self.auth_service.on_app_restored()
+                self.set_status("Приложение восстановлено")
+
+    def _start_security_poll(self):
+        self._poll_job = self.after(15_000, self._security_tick)
+
+    def _security_tick(self):
+        try:
+            if self.auth_service and not self.auth_service.is_unlocked():
+                self.set_status("Хранилище заблокировано")
+        finally:
+            self._poll_job = self.after(15_000, self._security_tick)
+
+    def on_close(self):
+        try:
+            if self.auth_service:
+                self.auth_service.logout()
+        finally:
+            self.destroy()
 
 
 if __name__ == "__main__":
