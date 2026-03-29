@@ -49,6 +49,42 @@ class VaultService:
             )
             conn.commit()
 
+    def update_entry(
+            self,
+            entry_id: int,
+            title: str,
+            username: str,
+            password: str,
+            url: str = "",
+            notes: str = "",
+            tags: str = "",
+    ):
+        title = clean_text(title, 120)
+        username = clean_text(username, 120)
+        url = clean_url(url, 500)
+        notes = clean_text(notes, 2000)
+        tags = clean_text(tags, 300)
+
+        validate_required("title", title)
+        validate_required("password", password)
+
+        enc_password = self.crypto.encrypt(password.encode("utf-8"))
+        enc_notes = self.crypto.encrypt(notes.encode("utf-8")) if notes else None
+
+        now = datetime.utcnow().isoformat(timespec="seconds")
+
+        with self.db.connection() as conn:
+            conn.execute(
+                """
+                UPDATE vault_entries
+                SET title = ?, username = ?, encrypted_password = ?, url = ?, notes = ?,
+                    updated_at = ?, tags = ?
+                WHERE id = ?
+                """,
+                (title, username, enc_password, url, enc_notes, now, tags, entry_id),
+            )
+            conn.commit()
+
     def list_entries(self):
         with self.db.connection() as conn:
             rows = conn.execute(
