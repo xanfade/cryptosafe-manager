@@ -2,20 +2,66 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Type
 from concurrent.futures import ThreadPoolExecutor
 
+
 @dataclass
-class EntryAdded: entry_id: int
+class EntryAdded:
+    entry_id: int
+
+
 @dataclass
-class EntryUpdated: entry_id: int
+class EntryUpdated:
+    entry_id: int
+
+
 @dataclass
-class EntryDeleted: entry_id: int
+class EntryDeleted:
+    entry_id: int
+
+
 @dataclass
-class UserLoggedIn: user: str = "local"
+class UserLoggedIn:
+    user: str = "local"
+
+
 @dataclass
-class UserLoggedOut: user: str = "local"
+class UserLoggedOut:
+    user: str = "local"
+
+
 @dataclass
-class ClipboardCopied: entry_id: int
+class ClipboardCopied:
+    entry_id: int
+
+
 @dataclass
-class ClipboardCleared: pass
+class ClipboardCleared:
+    pass
+
+
+@dataclass
+class AppFocusLost:
+    pass
+
+
+@dataclass
+class AppFocusGained:
+    pass
+
+
+@dataclass
+class AppMinimized:
+    pass
+
+
+@dataclass
+class AppRestored:
+    pass
+
+
+@dataclass
+class AutoLocked:
+    reason: str = "inactivity"
+
 
 class EventBus:
     def __init__(self):
