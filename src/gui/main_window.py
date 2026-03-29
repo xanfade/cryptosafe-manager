@@ -1,8 +1,9 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
+
 from src.gui.password_change_dialog import PasswordChangeDialog
-from src.database.db import Database
 from src.gui.widgets.audit_log_viewer import AuditLogViewer
+from src.gui.login_dialog import LoginDialog
 
 
 class EntryDialog(tk.Toplevel):
@@ -183,41 +184,37 @@ class EntryDialog(tk.Toplevel):
 class MainWindow(tk.Tk):
     def __init__(self, db=None, key_manager=None, auth_service=None):
         super().__init__()
-        self.title("CryptoSafe Manager")
-        self.geometry("1100x620")
-        self.minsize(900, 540)
-        self.configure(bg="#1e1e1e")
 
         self.db = db
         self.key_manager = key_manager
         self.auth_service = auth_service
 
+        self.rows = []
+        self.locked = False
+        self._is_minimized = False
         self._focus_out_job = None
         self._poll_job = None
-        self._is_minimized = False
 
-        self.rows = []
+        self.title("CryptoSafe Manager")
+        self.geometry("1100x620")
+        self.minsize(900, 540)
+        self.configure(bg="#1e1e1e")
 
         self.setup_styles()
         self.create_menu()
         self.create_toolbar()
         self.create_table()
         self.create_statusbar()
-        self.load_entries()
-        self.set_status("Готово")
-
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        self.bind("<FocusIn>", self._on_focus_in)
-        self.bind("<FocusOut>", self._on_focus_out)
-        self.bind("<Unmap>", self._on_unmap)
-        self.bind("<Map>", self._on_map)
-        self.bind_all("<Any-KeyPress>", self._on_user_activity)
-        self.bind_all("<Any-ButtonPress>", self._on_user_activity)
-        self.bind_all("<Motion>", self._on_user_activity)
+        self._bind_auth_integration()
+        self.after(1000, self._poll_session_state)
 
-        self._start_security_poll()
+        if self.auth_service and not self.auth_service.is_unlocked():
+            self.apply_locked_state()
+        else:
+            self.apply_unlocked_state()
 
     def setup_styles(self):
         style = ttk.Style(self)
@@ -264,14 +261,8 @@ class MainWindow(tk.Tk):
         )
         style.map(
             "Dark.TButton",
-            background=[
-                ("active", "#4a4a4a"),
-                ("pressed", "#2f2f2f")
-            ],
-            foreground=[
-                ("active", "#ffffff"),
-                ("pressed", "#ffffff")
-            ]
+            background=[("active", "#4a4a4a"), ("pressed", "#2f2f2f")],
+            foreground=[("active", "#ffffff"), ("pressed", "#ffffff")]
         )
 
     def create_menu(self):
@@ -285,27 +276,20 @@ class MainWindow(tk.Tk):
         )
 
         file_menu = tk.Menu(
-            menubar,
-            tearoff=0,
-            bg="#2b2b2b",
-            fg="#ffffff",
-            activebackground="#3a3a3a",
-            activeforeground="#ffffff"
+            menubar, tearoff=0,
+            bg="#2b2b2b", fg="#ffffff",
+            activebackground="#3a3a3a", activeforeground="#ffffff"
         )
-        file_menu.add_command(label="New")
-        file_menu.add_command(label="Open")
-        file_menu.add_command(label="Backup")
+        file_menu.add_command(label="Разблокировать", command=self.unlock_vault)
+        file_menu.add_command(label="Заблокировать", command=self.lock_vault)
         file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.on_close if hasattr(self, "on_close") else self.destroy)
+        file_menu.add_command(label="Exit", command=self.on_close)
         menubar.add_cascade(label="File", menu=file_menu)
 
         edit_menu = tk.Menu(
-            menubar,
-            tearoff=0,
-            bg="#2b2b2b",
-            fg="#ffffff",
-            activebackground="#3a3a3a",
-            activeforeground="#ffffff"
+            menubar, tearoff=0,
+            bg="#2b2b2b", fg="#ffffff",
+            activebackground="#3a3a3a", activeforeground="#ffffff"
         )
         edit_menu.add_command(label="Добавить", command=self.add_record)
         edit_menu.add_command(label="Изменить", command=self.edit_record)
@@ -313,35 +297,25 @@ class MainWindow(tk.Tk):
         menubar.add_cascade(label="Edit", menu=edit_menu)
 
         security_menu = tk.Menu(
-            menubar,
-            tearoff=0,
-            bg="#2b2b2b",
-            fg="#ffffff",
-            activebackground="#3a3a3a",
-            activeforeground="#ffffff"
+            menubar, tearoff=0,
+            bg="#2b2b2b", fg="#ffffff",
+            activebackground="#3a3a3a", activeforeground="#ffffff"
         )
         security_menu.add_command(label="Сменить мастер-пароль", command=self.open_password_change_dialog)
         menubar.add_cascade(label="Security", menu=security_menu)
 
         view_menu = tk.Menu(
-            menubar,
-            tearoff=0,
-            bg="#2b2b2b",
-            fg="#ffffff",
-            activebackground="#3a3a3a",
-            activeforeground="#ffffff"
+            menubar, tearoff=0,
+            bg="#2b2b2b", fg="#ffffff",
+            activebackground="#3a3a3a", activeforeground="#ffffff"
         )
         view_menu.add_command(label="Logs", command=lambda: AuditLogViewer(self))
-        view_menu.add_command(label="Settings")
         menubar.add_cascade(label="View", menu=view_menu)
 
         help_menu = tk.Menu(
-            menubar,
-            tearoff=0,
-            bg="#2b2b2b",
-            fg="#ffffff",
-            activebackground="#3a3a3a",
-            activeforeground="#ffffff"
+            menubar, tearoff=0,
+            bg="#2b2b2b", fg="#ffffff",
+            activebackground="#3a3a3a", activeforeground="#ffffff"
         )
         help_menu.add_command(label="About")
         menubar.add_cascade(label="Help", menu=help_menu)
@@ -353,29 +327,45 @@ class MainWindow(tk.Tk):
         toolbar.pack(fill="x", padx=10, pady=(10, 0))
         toolbar.pack_propagate(False)
 
-        self.add_btn = ttk.Button(
+        self.btn_unlock = ttk.Button(
+            toolbar,
+            text="Разблокировать",
+            command=self.unlock_vault,
+            style="Dark.TButton"
+        )
+        self.btn_unlock.pack(side="left", padx=(10, 6), pady=8)
+
+        self.btn_lock = ttk.Button(
+            toolbar,
+            text="Заблокировать",
+            command=self.lock_vault,
+            style="Dark.TButton"
+        )
+        self.btn_lock.pack(side="left", padx=6, pady=8)
+
+        self.btn_add = ttk.Button(
             toolbar,
             text="Добавить",
             command=self.add_record,
             style="Dark.TButton"
         )
-        self.add_btn.pack(side="left", padx=(10, 6), pady=8)
+        self.btn_add.pack(side="left", padx=6, pady=8)
 
-        self.edit_btn = ttk.Button(
+        self.btn_edit = ttk.Button(
             toolbar,
             text="Изменить",
             command=self.edit_record,
             style="Dark.TButton"
         )
-        self.edit_btn.pack(side="left", padx=6, pady=8)
+        self.btn_edit.pack(side="left", padx=6, pady=8)
 
-        self.delete_btn = ttk.Button(
+        self.btn_delete = ttk.Button(
             toolbar,
             text="Удалить",
             command=self.delete_record,
             style="Dark.TButton"
         )
-        self.delete_btn.pack(side="left", padx=6, pady=8)
+        self.btn_delete.pack(side="left", padx=6, pady=8)
 
     def create_table(self):
         outer = tk.Frame(self, bg="#1e1e1e")
@@ -432,13 +422,28 @@ class MainWindow(tk.Tk):
     def set_status(self, text):
         self.status.set(text)
 
+    def _clear_table(self):
+        if not hasattr(self, "table"):
+            return
+        for item in self.table.get_children():
+            self.table.delete(item)
+
     def load_entries(self):
+        if getattr(self, "locked", False):
+            self.rows = []
+            self._clear_table()
+            return
+
+        if not self.db:
+            self.rows = []
+            self._clear_table()
+            return
+
         self.rows = self.db.get_all_entries()
         self.refresh_table()
 
     def refresh_table(self):
-        for item in self.table.get_children():
-            self.table.delete(item)
+        self._clear_table()
 
         for row in self.rows:
             self.table.insert(
@@ -446,11 +451,11 @@ class MainWindow(tk.Tk):
                 "end",
                 iid=str(row["id"]),
                 values=(
-                    row["title"],
-                    row["username"],
-                    row["password"],
-                    row["url"],
-                    row["notes"]
+                    row.get("title", ""),
+                    row.get("username", ""),
+                    "********",
+                    row.get("url", ""),
+                    row.get("notes", "")
                 )
             )
 
@@ -464,6 +469,8 @@ class MainWindow(tk.Tk):
         self.wait_window(dialog)
 
     def get_selected_id(self):
+        if self.locked:
+            return None
         selected = self.table.selection()
         if not selected:
             return None
@@ -476,6 +483,10 @@ class MainWindow(tk.Tk):
         return None
 
     def add_record(self):
+        if self.locked:
+            messagebox.showwarning("Хранилище заблокировано", "Сначала разблокируй хранилище", parent=self)
+            return
+
         dialog = EntryDialog(self, title="Добавить запись")
         self.wait_window(dialog)
 
@@ -491,6 +502,10 @@ class MainWindow(tk.Tk):
             self.set_status("Запись добавлена")
 
     def edit_record(self):
+        if self.locked:
+            messagebox.showwarning("Хранилище заблокировано", "Сначала разблокируй хранилище", parent=self)
+            return
+
         entry_id = self.get_selected_id()
         if entry_id is None:
             messagebox.showwarning("Внимание", "Сначала выберите запись.", parent=self)
@@ -519,6 +534,10 @@ class MainWindow(tk.Tk):
             self.set_status("Запись изменена")
 
     def delete_record(self):
+        if self.locked:
+            messagebox.showwarning("Хранилище заблокировано", "Сначала разблокируй хранилище", parent=self)
+            return
+
         entry_id = self.get_selected_id()
         if entry_id is None:
             messagebox.showwarning("Внимание", "Сначала выберите запись.", parent=self)
@@ -534,29 +553,99 @@ class MainWindow(tk.Tk):
             self.load_entries()
             self.set_status("Запись удалена")
 
-    def on_close(self):
-        if hasattr(self.db, "close_thread_connection"):
-            self.db.close_thread_connection()
-        self.destroy()
+    def apply_locked_state(self):
+        self.locked = True
+        self.rows = []
+        self._clear_table()
 
-    def _on_user_activity(self, event=None):
+        self.btn_unlock.config(state="normal")
+        self.btn_lock.config(state="disabled")
+        self.btn_add.config(state="disabled")
+        self.btn_edit.config(state="disabled")
+        self.btn_delete.config(state="disabled")
+
+        self.set_status("Хранилище заблокировано")
+
+    def apply_unlocked_state(self):
+        self.locked = False
+
+        self.btn_unlock.config(state="disabled")
+        self.btn_lock.config(state="normal")
+        self.btn_add.config(state="normal")
+        self.btn_edit.config(state="normal")
+        self.btn_delete.config(state="normal")
+
+        self.load_entries()
+        self.set_status("Хранилище разблокировано")
+
+    def lock_vault(self):
         if self.auth_service:
+            try:
+                self.auth_service.logout()
+            except Exception:
+                pass
+        self.apply_locked_state()
+
+    def unlock_vault(self):
+        if not self.auth_service:
+            messagebox.showerror("Ошибка", "Сервис аутентификации не подключён", parent=self)
+            return
+
+        dlg = LoginDialog(self, self.auth_service)
+        self.wait_window(dlg)
+
+        if getattr(dlg, "result", False):
+            self.apply_unlocked_state()
+        else:
+            self.apply_locked_state()
+
+    def _bind_auth_integration(self):
+        if not self.auth_service:
+            return
+
+        self.bind_all("<Any-KeyPress>", self._mark_activity, add="+")
+        self.bind_all("<Any-ButtonPress>", self._mark_activity, add="+")
+        self.bind("<FocusIn>", self._on_focus_in, add="+")
+        self.bind("<FocusOut>", self._on_focus_out, add="+")
+        self.bind("<Unmap>", self._on_unmap, add="+")
+        self.bind("<Map>", self._on_map, add="+")
+
+    def _mark_activity(self, event=None):
+        if self.auth_service and self.auth_service.is_unlocked():
             self.auth_service.touch()
 
     def _on_focus_out(self, event=None):
-        if not self.auth_service:
+        if not self.auth_service or not self.auth_service.is_unlocked():
             return
 
         if self._focus_out_job is not None:
             self.after_cancel(self._focus_out_job)
 
-        self._focus_out_job = self.after(150, self._apply_focus_out)
+        self._focus_out_job = self.after(200, self._apply_focus_out)
 
     def _apply_focus_out(self):
         self._focus_out_job = None
-        if self.auth_service:
-            self.auth_service.on_app_focus_lost()
-            self.set_status("Ключ очищен: приложение потеряло фокус")
+
+        try:
+            current_focus = self.focus_displayof()
+        except Exception:
+            current_focus = None
+
+        # Если фокус всё ещё внутри нашего приложения, не блокируем
+        if current_focus is not None:
+            try:
+                top = current_focus.winfo_toplevel()
+                if top is self or isinstance(top, tk.Toplevel):
+                    return
+            except Exception:
+                return
+
+        if self.auth_service and self.auth_service.is_unlocked():
+            try:
+                self.auth_service.on_app_focus_lost()
+            except Exception:
+                pass
+            self.apply_locked_state()
 
     def _on_focus_in(self, event=None):
         if self._focus_out_job is not None:
@@ -564,39 +653,54 @@ class MainWindow(tk.Tk):
             self._focus_out_job = None
 
         if self.auth_service:
-            self.auth_service.on_app_focus_gained()
-            self.set_status("Приложение активно")
+            try:
+                self.auth_service.on_app_focus_gained()
+            except Exception:
+                pass
 
     def _on_unmap(self, event=None):
-        if self.state() == "iconic":
-            self._is_minimized = True
-            if self.auth_service:
-                self.auth_service.on_app_minimized()
-                self.set_status("Ключ очищен: приложение свёрнуто")
+        try:
+            if self.state() == "iconic":
+                self._is_minimized = True
+                if self.auth_service and self.auth_service.is_unlocked():
+                    try:
+                        self.auth_service.on_app_minimized()
+                    except Exception:
+                        pass
+                    self.apply_locked_state()
+        except Exception:
+            pass
 
     def _on_map(self, event=None):
         if self._is_minimized:
             self._is_minimized = False
             if self.auth_service:
-                self.auth_service.on_app_restored()
-                self.set_status("Приложение восстановлено")
+                try:
+                    self.auth_service.on_app_restored()
+                except Exception:
+                    pass
 
-    def _start_security_poll(self):
-        self._poll_job = self.after(15_000, self._security_tick)
+    def _poll_session_state(self):
+        if self.auth_service:
+            unlocked = self.auth_service.is_unlocked()
+            if unlocked and self.locked:
+                self.apply_unlocked_state()
+            elif not unlocked and not self.locked:
+                self.apply_locked_state()
 
-    def _security_tick(self):
-        try:
-            if self.auth_service and not self.auth_service.is_unlocked():
-                self.set_status("Хранилище заблокировано")
-        finally:
-            self._poll_job = self.after(15_000, self._security_tick)
+        self.after(1000, self._poll_session_state)
 
     def on_close(self):
-        try:
-            if self.auth_service:
+        if self.auth_service:
+            try:
                 self.auth_service.logout()
-        finally:
-            self.destroy()
+            except Exception:
+                pass
+
+        if hasattr(self.db, "close_thread_connection"):
+            self.db.close_thread_connection()
+
+        self.destroy()
 
 
 if __name__ == "__main__":

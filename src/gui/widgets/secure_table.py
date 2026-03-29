@@ -21,3 +21,7 @@ class SecureTable(ttk.Frame):
             self.tree.delete(item)
         for r in rows:
             self.tree.insert("", "end", values=r)
+
+    def clear(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)

@@ -43,12 +43,13 @@ def main():
     key_manager = KeyManager(db)
     auth_service = AuthenticationService(key_manager, event_bus=event_bus)
 
-    login = LoginDialog(root, auth_service)
-    root.wait_window(login)
+    if key_manager.is_initialized():
+        login = LoginDialog(root, auth_service)
+        root.wait_window(login)
 
-    if not login.result:
-        root.destroy()
-        return
+        if not login.result:
+            root.destroy()
+            return
 
     root.destroy()
 

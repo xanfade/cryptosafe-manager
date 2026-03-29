@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import threading
 from pathlib import Path
@@ -47,35 +48,62 @@ class Database:
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
         old_table = conn.execute("""
-            SELECT name FROM sqlite_master
+            SELECT name
+            FROM sqlite_master
             WHERE type='table' AND name='key_store'
         """).fetchone()
 
         if old_table:
-            rows = conn.execute("""
-                SELECT id, key_type, salt, hash, params
-                FROM key_store
-            """).fetchall()
+            columns_info = conn.execute("PRAGMA table_info(key_store)").fetchall()
+            columns = {row["name"] for row in columns_info}
 
-            for _, old_key_type, salt, hash_value, params in rows:
-                if hash_value is not None:
+            rows = conn.execute("SELECT * FROM key_store").fetchall()
+
+            if {"key_type", "key_data", "version", "created_at"}.issubset(columns):
+                for row in rows:
                     conn.execute("""
                         INSERT INTO key_store_new (key_type, key_data, version, created_at)
                         VALUES (?, ?, ?, ?)
-                    """, ("auth_hash", hash_value, 1, now))
+                    """, (
+                        row["key_type"],
+                        row["key_data"],
+                        row["version"] if row["version"] is not None else 1,
+                        row["created_at"] if row["created_at"] else now,
+                    ))
+            else:
+                for row in rows:
+                    row_keys = set(row.keys())
 
-                if salt is not None:
-                    migrated_type = "enc_salt" if old_key_type == "enc_salt" else "auth_salt"
-                    conn.execute("""
-                        INSERT INTO key_store_new (key_type, key_data, version, created_at)
-                        VALUES (?, ?, ?, ?)
-                    """, (migrated_type, salt, 1, now))
+                    old_key_type = row["key_type"] if "key_type" in row_keys else "master"
+                    salt = row["salt"] if "salt" in row_keys else None
+                    hash_value = row["hash"] if "hash" in row_keys else None
+                    params = row["params"] if "params" in row_keys else None
 
-                if params is not None:
-                    conn.execute("""
-                        INSERT INTO key_store_new (key_type, key_data, version, created_at)
-                        VALUES (?, ?, ?, ?)
-                    """, ("params", params.encode("utf-8"), 1, now))
+                    if hash_value is not None:
+                        conn.execute("""
+                            INSERT INTO key_store_new (key_type, key_data, version, created_at)
+                            VALUES (?, ?, ?, ?)
+                        """, ("auth_hash", hash_value, 1, now))
+
+                    if salt is not None:
+                        migrated_type = "enc_salt" if old_key_type == "enc_salt" else "auth_salt"
+                        conn.execute("""
+                            INSERT INTO key_store_new (key_type, key_data, version, created_at)
+                            VALUES (?, ?, ?, ?)
+                        """, (migrated_type, salt, 1, now))
+
+                    if params is not None:
+                        if isinstance(params, bytes):
+                            key_data = params
+                        elif isinstance(params, str):
+                            key_data = params.encode("utf-8")
+                        else:
+                            key_data = json.dumps(params).encode("utf-8")
+
+                        conn.execute("""
+                            INSERT INTO key_store_new (key_type, key_data, version, created_at)
+                            VALUES (?, ?, ?, ?)
+                        """, ("params", key_data, 1, now))
 
             conn.execute("DROP TABLE key_store")
             conn.execute("ALTER TABLE key_store_new RENAME TO key_store")
@@ -89,8 +117,7 @@ class Database:
     def get_all_entries(self):
         with self.connection() as conn:
             rows = conn.execute("""
-                SELECT id, title, username, encrypted_password, url, notes,
-                       created_at, updated_at, tags
+                SELECT id, title, username, encrypted_password, url, notes, created_at, updated_at, tags
                 FROM vault_entries
                 ORDER BY id DESC
             """).fetchall()
@@ -115,8 +142,7 @@ class Database:
         with self.connection() as conn:
             cursor = conn.execute("""
                 INSERT INTO vault_entries (
-                    title, username, encrypted_password, url, notes,
-                    created_at, updated_at, tags
+                    title, username, encrypted_password, url, notes, created_at, updated_at, tags
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
@@ -137,13 +163,7 @@ class Database:
         with self.connection() as conn:
             conn.execute("""
                 UPDATE vault_entries
-                SET title = ?,
-                    username = ?,
-                    encrypted_password = ?,
-                    url = ?,
-                    notes = ?,
-                    updated_at = ?,
-                    tags = ?
+                SET title = ?, username = ?, encrypted_password = ?, url = ?, notes = ?, updated_at = ?, tags = ?
                 WHERE id = ?
             """, (
                 title,
