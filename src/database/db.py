@@ -1,11 +1,10 @@
-import json
 import sqlite3
 import threading
 from pathlib import Path
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from .models import SCHEMA_V1, SCHEMA_V2
+from .models import SCHEMA_V1, SCHEMA_V2, SCHEMA_V3
 
 
 class Database:
@@ -42,9 +41,16 @@ class Database:
                 self._migrate_v1_to_v2(conn)
                 conn.execute("PRAGMA user_version = 2;")
                 conn.commit()
+                version = 2
+
+            if version < 3:
+                self._migrate_v2_to_v3(conn)
+                conn.execute("PRAGMA user_version = 3;")
+                conn.commit()
 
     def _migrate_v1_to_v2(self, conn: sqlite3.Connection):
         conn.executescript(SCHEMA_V2)
+
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
         old_table = conn.execute("""
@@ -56,7 +62,6 @@ class Database:
         if old_table:
             columns_info = conn.execute("PRAGMA table_info(key_store)").fetchall()
             columns = {row["name"] for row in columns_info}
-
             rows = conn.execute("SELECT * FROM key_store").fetchall()
 
             if {"key_type", "key_data", "version", "created_at"}.issubset(columns):
@@ -73,7 +78,6 @@ class Database:
             else:
                 for row in rows:
                     row_keys = set(row.keys())
-
                     old_key_type = row["key_type"] if "key_type" in row_keys else "master"
                     salt = row["salt"] if "salt" in row_keys else None
                     hash_value = row["hash"] if "hash" in row_keys else None
@@ -98,7 +102,7 @@ class Database:
                         elif isinstance(params, str):
                             key_data = params.encode("utf-8")
                         else:
-                            key_data = json.dumps(params).encode("utf-8")
+                            key_data = str(params).encode("utf-8")
 
                         conn.execute("""
                             INSERT INTO key_store_new (key_type, key_data, version, created_at)
@@ -108,16 +112,41 @@ class Database:
             conn.execute("DROP TABLE key_store")
             conn.execute("ALTER TABLE key_store_new RENAME TO key_store")
 
+    def _migrate_v2_to_v3(self, conn: sqlite3.Connection):
+        conn.executescript(SCHEMA_V3)
+
     def close_thread_connection(self):
         conn = getattr(self._local, "conn", None)
         if conn is not None:
             conn.close()
             self._local.conn = None
 
+    def get_setting(self, key: str, default=None):
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT setting_value FROM settings WHERE setting_key = ?",
+                (key,)
+            ).fetchone()
+            if row is None:
+                return default
+            return row["setting_value"]
+
+    def set_setting(self, key: str, value: str, encrypted: int = 0):
+        with self.connection() as conn:
+            conn.execute("""
+                INSERT INTO settings(setting_key, setting_value, encrypted)
+                VALUES (?, ?, ?)
+                ON CONFLICT(setting_key) DO UPDATE SET
+                    setting_value = excluded.setting_value,
+                    encrypted = excluded.encrypted
+            """, (key, value, encrypted))
+            conn.commit()
+
     def get_all_entries(self):
         with self.connection() as conn:
             rows = conn.execute("""
-                SELECT id, title, username, encrypted_password, url, notes, created_at, updated_at, tags
+                SELECT id, title, username, encrypted_password, url, notes,
+                       created_at, updated_at, tags
                 FROM vault_entries
                 ORDER BY id DESC
             """).fetchall()
@@ -142,7 +171,8 @@ class Database:
         with self.connection() as conn:
             cursor = conn.execute("""
                 INSERT INTO vault_entries (
-                    title, username, encrypted_password, url, notes, created_at, updated_at, tags
+                    title, username, encrypted_password, url, notes,
+                    created_at, updated_at, tags
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
@@ -163,7 +193,8 @@ class Database:
         with self.connection() as conn:
             conn.execute("""
                 UPDATE vault_entries
-                SET title = ?, username = ?, encrypted_password = ?, url = ?, notes = ?, updated_at = ?, tags = ?
+                SET title = ?, username = ?, encrypted_password = ?, url = ?,
+                    notes = ?, updated_at = ?, tags = ?
                 WHERE id = ?
             """, (
                 title,
