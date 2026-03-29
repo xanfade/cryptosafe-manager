@@ -5,13 +5,19 @@ import time
 from dataclasses import dataclass
 
 from src.core.crypto.key_derivation import (
-    Argon2Params,
-    PBKDF2Params,
     derive_encryption_key,
     verify_auth_hash,
 )
-from src.core.events import UserLoggedIn, UserLoggedOut, EventBus
-
+from src.core.events import (
+    AppFocusGained,
+    AppFocusLost,
+    AppMinimized,
+    AppRestored,
+    AutoLocked,
+    EventBus,
+    UserLoggedIn,
+    UserLoggedOut,
+)
 
 COMMON_PASSWORDS = {
     "password123",
@@ -79,6 +85,7 @@ class AuthenticationService:
             salt=bundle["enc_salt"],
             params=bundle["pbkdf2_params"],
         )
+
         self.key_manager.cache_encryption_key(enc_key)
 
         now = time.time()
@@ -93,9 +100,43 @@ class AuthenticationService:
 
     def logout(self) -> None:
         self.key_manager.clear_cache()
+        self.session.login_time = None
+        self.session.last_activity_time = None
+
         if self.event_bus:
+            self.event_bus.publish(UserLoggedOut(user="local"))
+
+    def auto_lock(self, reason: str = "inactivity") -> None:
+        self.key_manager.clear_cache()
+        self.session.last_activity_time = None
+
+        if self.event_bus:
+            self.event_bus.publish(AutoLocked(reason=reason))
             self.event_bus.publish(UserLoggedOut(user="local"))
 
     def touch(self) -> None:
         self.session.last_activity_time = time.time()
         self.key_manager.touch_cache()
+
+    def on_app_focus_lost(self) -> None:
+        self.key_manager.on_app_focus_lost()
+        if self.event_bus:
+            self.event_bus.publish(AppFocusLost())
+
+    def on_app_focus_gained(self) -> None:
+        self.key_manager.on_app_focus_gained()
+        if self.event_bus:
+            self.event_bus.publish(AppFocusGained())
+
+    def on_app_minimized(self) -> None:
+        self.key_manager.on_app_minimized()
+        if self.event_bus:
+            self.event_bus.publish(AppMinimized())
+
+    def on_app_restored(self) -> None:
+        self.key_manager.on_app_restored()
+        if self.event_bus:
+            self.event_bus.publish(AppRestored())
+
+    def is_unlocked(self) -> bool:
+        return self.key_manager.has_cached_key()
