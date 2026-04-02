@@ -5,6 +5,7 @@ from src.gui.password_change_dialog import PasswordChangeDialog
 from src.gui.widgets.audit_log_viewer import AuditLogViewer
 from src.gui.login_dialog import LoginDialog
 from src.core.services.vault_service import VaultService
+from src.core.vault.password_generator import PasswordGenerator
 
 class EntryDialog(tk.Toplevel):
     def __init__(self, parent, title="Добавить запись", data=None):
@@ -50,7 +51,70 @@ class EntryDialog(tk.Toplevel):
         self.fields["username"] = self._create_entry(form, 3, initial["username"])
 
         self._create_label(form, "Пароль", 4)
-        self.fields["password"] = self._create_entry(form, 5, initial["password"])
+
+
+
+        self.password_generator = PasswordGenerator()
+        self.password_visible = False
+
+        password_wrap = tk.Frame(form, bg="#1e1e1e")
+        password_wrap.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        password_wrap.grid_columnconfigure(0, weight=1)
+
+        self.fields["password"] = tk.Entry(
+            password_wrap,
+            bg="#2a2a2a",
+            fg="#ffffff",
+            insertbackground="#ffffff",
+            relief="flat",
+            font=("Arial", 11),
+            show="*"
+        )
+        self.fields["password"].grid(row=0, column=0, sticky="ew", ipady=8)
+        self.fields["password"].insert(0, initial["password"])
+
+        generate_btn = tk.Button(
+            password_wrap,
+            text="Сгенерировать",
+            command=self.generate_password,
+            bg="#3b6fe0",
+            fg="#ffffff",
+            activebackground="#2f5fc7",
+            activeforeground="#ffffff",
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            cursor="hand2",
+            font=("Arial", 11, "bold"),
+            padx=18,
+            pady=8,
+        )
+        generate_btn.grid(row=0, column=1, padx=(12, 0), sticky="ew")
+
+        toggle_btn = tk.Button(
+            password_wrap,
+            text="Показать",
+            command=self.toggle_password_visibility,
+            bg="#3b6fe0",
+            fg="#ffffff",
+            activebackground="#2f5fc7",
+            activeforeground="#ffffff",
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            cursor="hand2",
+            font=("Arial", 11, "bold"),
+            padx=18,
+            pady=8,
+        )
+        toggle_btn.grid(row=0, column=2, padx=(10, 0), sticky="ew")
+
+        generate_btn.bind("<Enter>", lambda e: generate_btn.config(bg="#2f5fc7"))
+        generate_btn.bind("<Leave>", lambda e: generate_btn.config(bg="#3b6fe0"))
+        toggle_btn.bind("<Enter>", lambda e: toggle_btn.config(bg="#2f5fc7"))
+        toggle_btn.bind("<Leave>", lambda e: toggle_btn.config(bg="#3b6fe0"))
+
+        self.toggle_password_btn = toggle_btn
 
         self._create_label(form, "URL", 6)
         self.fields["url"] = self._create_entry(form, 7, initial["url"])
@@ -112,6 +176,38 @@ class EntryDialog(tk.Toplevel):
             bg="#1e1e1e",
             fg="#d7d7d7"
         ).grid(row=row, column=0, sticky="w", pady=(0, 6))
+
+    def generate_password(self):
+        password = self.password_generator.generate(
+            length=20,
+            use_lowercase=True,
+            use_uppercase=True,
+            use_digits=True,
+            use_symbols=True,
+        )
+        self.fields["password"].delete(0, tk.END)
+        self.fields["password"].insert(0, password)
+        self.fields["password"].focus_set()
+
+    def toggle_password_visibility(self):
+        self.password_visible = not self.password_visible
+
+        if self.password_visible:
+            self.fields["password"].config(show="")
+            self.toggle_password_btn.config(text="Скрыть")
+        else:
+            self.fields["password"].config(show="*")
+            self.toggle_password_btn.config(text="Показать")
+
+    def toggle_password_visibility(self):
+        self.password_visible = not self.password_visible
+
+        if self.password_visible:
+            self.fields["password"].config(show="")
+            self.toggle_password_btn.config(text="Скрыть")
+        else:
+            self.fields["password"].config(show="*")
+            self.toggle_password_btn.config(text="Показать")
 
     def _create_entry(self, parent, row, value=""):
         entry = tk.Entry(
