@@ -76,10 +76,12 @@ INSERT OR IGNORE INTO settings (setting_key, setting_value, encrypted) VALUES
 SCHEMA_V4 = """
 CREATE TABLE IF NOT EXISTS vault_entries_new (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    entry_blob BLOB NOT NULL,
-    tags TEXT,
-    updated_at TEXT NOT NULL
+    encrypted_data BLOB NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    tags TEXT
 );
 
+CREATE INDEX IF NOT EXISTS idx_vault_created_v4 ON vault_entries_new(created_at);
 CREATE INDEX IF NOT EXISTS idx_vault_updated_v4 ON vault_entries_new(updated_at);
 """

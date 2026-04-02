@@ -109,10 +109,11 @@ class EntryDialog(tk.Toplevel):
         )
         toggle_btn.grid(row=0, column=2, padx=(10, 0), sticky="ew")
 
-        generate_btn.bind("<Enter>", lambda e: generate_btn.config(bg="#2f5fc7"))
-        generate_btn.bind("<Leave>", lambda e: generate_btn.config(bg="#3b6fe0"))
-        toggle_btn.bind("<Enter>", lambda e: toggle_btn.config(bg="#2f5fc7"))
-        toggle_btn.bind("<Leave>", lambda e: toggle_btn.config(bg="#3b6fe0"))
+        generate_btn.bind("<Enter>", lambda e: generate_btn.config(bg="#1d4ed8"))
+        generate_btn.bind("<Leave>", lambda e: generate_btn.config(bg="#2563eb"))
+
+        toggle_btn.bind("<Enter>", lambda e: toggle_btn.config(bg="#1d4ed8"))
+        toggle_btn.bind("<Leave>", lambda e: toggle_btn.config(bg="#2563eb"))
 
         self.toggle_password_btn = toggle_btn
 

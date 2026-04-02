@@ -124,13 +124,7 @@ class Database:
     def _migrate_v3_to_v4(self, conn):
         conn.executescript(SCHEMA_V4)
 
-        old_rows = conn.execute("""
-            SELECT id, title, username, encrypted_password, url, notes, created_at, updated_at, tags
-            FROM vault_entries
-            ORDER BY id
-        """).fetchall()
-
-        conn.execute("DROP TABLE vault_entries")
+        conn.execute("DROP TABLE IF EXISTS vault_entries")
         conn.execute("ALTER TABLE vault_entries_new RENAME TO vault_entries")
 
     def close_thread_connection(self):
