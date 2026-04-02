@@ -76,7 +76,7 @@ INSERT OR IGNORE INTO settings (setting_key, setting_value, encrypted) VALUES
 SCHEMA_V4 = """
 CREATE TABLE IF NOT EXISTS vault_entries_new (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    encrypted_blob BLOB NOT NULL,
+    entry_blob BLOB NOT NULL,
     tags TEXT,
     updated_at TEXT NOT NULL
 );
