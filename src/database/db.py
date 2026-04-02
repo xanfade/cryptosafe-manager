@@ -4,7 +4,7 @@ from pathlib import Path
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from .models import SCHEMA_V1, SCHEMA_V2, SCHEMA_V3
+from .models import SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4
 
 
 class Database:
@@ -44,8 +44,14 @@ class Database:
                 version = 2
 
             if version < 3:
-                self._migrate_v2_to_v3(conn)
+                conn.executescript(SCHEMA_V3)
                 conn.execute("PRAGMA user_version = 3;")
+                conn.commit()
+                version = 3
+
+            if version < 4:
+                self._migrate_v3_to_v4(conn)
+                conn.execute("PRAGMA user_version = 4;")
                 conn.commit()
 
     def _migrate_v1_to_v2(self, conn: sqlite3.Connection):
@@ -114,6 +120,18 @@ class Database:
 
     def _migrate_v2_to_v3(self, conn: sqlite3.Connection):
         conn.executescript(SCHEMA_V3)
+
+    def _migrate_v3_to_v4(self, conn):
+        conn.executescript(SCHEMA_V4)
+
+        old_rows = conn.execute("""
+            SELECT id, title, username, encrypted_password, url, notes, created_at, updated_at, tags
+            FROM vault_entries
+            ORDER BY id
+        """).fetchall()
+
+        conn.execute("DROP TABLE vault_entries")
+        conn.execute("ALTER TABLE vault_entries_new RENAME TO vault_entries")
 
     def close_thread_connection(self):
         conn = getattr(self._local, "conn", None)
