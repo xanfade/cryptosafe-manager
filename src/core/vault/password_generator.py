@@ -1,51 +1,73 @@
-from __future__ import annotations
-
 import secrets
 import string
 
 
 class PasswordGenerator:
-    def __init__(self):
-        self.lowercase = string.ascii_lowercase
-        self.uppercase = string.ascii_uppercase
-        self.digits = string.digits
-        self.symbols = "!@#$%^&*()-_=+[]{};:,.?/"
+    AMBIGUOUS_CHARS = {"l", "I", "1", "0", "O"}
+    SPECIAL_CHARS = "!@#$%^&*"
 
+    @classmethod
     def generate(
-        self,
-        length: int = 20,
-        use_lowercase: bool = True,
+        cls,
+        length: int = 16,
         use_uppercase: bool = True,
+        use_lowercase: bool = True,
         use_digits: bool = True,
-        use_symbols: bool = True,
+        use_special: bool = True,
+        exclude_ambiguous: bool = False,
     ) -> str:
-        pools = []
-        required_chars = []
+        if not 8 <= length <= 64:
+            raise ValueError("Длина пароля должна быть в диапазоне от 8 до 64 символов.")
+
+        char_sets = []
+
+        if use_uppercase:
+            chars = cls._filter_ambiguous(string.ascii_uppercase, exclude_ambiguous)
+            if chars:
+                char_sets.append(chars)
 
         if use_lowercase:
-            pools.append(self.lowercase)
-            required_chars.append(secrets.choice(self.lowercase))
-        if use_uppercase:
-            pools.append(self.uppercase)
-            required_chars.append(secrets.choice(self.uppercase))
-        if use_digits:
-            pools.append(self.digits)
-            required_chars.append(secrets.choice(self.digits))
-        if use_symbols:
-            pools.append(self.symbols)
-            required_chars.append(secrets.choice(self.symbols))
+            chars = cls._filter_ambiguous(string.ascii_lowercase, exclude_ambiguous)
+            if chars:
+                char_sets.append(chars)
 
-        if not pools:
+        if use_digits:
+            chars = cls._filter_ambiguous(string.digits, exclude_ambiguous)
+            if chars:
+                char_sets.append(chars)
+
+        if use_special:
+            chars = cls._filter_ambiguous(cls.SPECIAL_CHARS, exclude_ambiguous)
+            if chars:
+                char_sets.append(chars)
+
+        if not char_sets:
             raise ValueError("Нужно выбрать хотя бы один набор символов.")
 
-        if length < len(required_chars):
-            raise ValueError("Длина пароля меньше количества обязательных групп символов.")
+        if length < len(char_sets):
+            raise ValueError(
+                "Длина пароля слишком мала для выбранных наборов символов."
+            )
 
-        all_chars = "".join(pools)
-        result = required_chars[:]
+        required_chars = [secrets.choice(char_set) for char_set in char_sets]
+        all_chars = "".join(char_sets)
 
-        while len(result) < length:
-            result.append(secrets.choice(all_chars))
+        password_chars = required_chars[:]
+        for _ in range(length - len(required_chars)):
+            password_chars.append(secrets.choice(all_chars))
 
-        secrets.SystemRandom().shuffle(result)
-        return "".join(result)
+        cls._secure_shuffle(password_chars)
+
+        return "".join(password_chars)
+
+    @classmethod
+    def _filter_ambiguous(cls, chars: str, exclude_ambiguous: bool) -> str:
+        if not exclude_ambiguous:
+            return chars
+        return "".join(ch for ch in chars if ch not in cls.AMBIGUOUS_CHARS)
+
+    @staticmethod
+    def _secure_shuffle(items: list[str]) -> None:
+        for i in range(len(items) - 1, 0, -1):
+            j = secrets.randbelow(i + 1)
+            items[i], items[j] = items[j], items[i]
