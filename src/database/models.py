@@ -72,3 +72,14 @@ INSERT OR IGNORE INTO settings (setting_key, setting_value, encrypted) VALUES
 ('key_derivation.pbkdf2', '{"iterations":600000,"dklen":32,"hash_name":"sha256","salt_len":16}', 0),
 ('security.auto_lock_timeout_sec', '900', 0);
 """
+
+SCHEMA_V4 = """
+CREATE TABLE IF NOT EXISTS vault_entries_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    encrypted_blob BLOB NOT NULL,
+    tags TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_vault_updated_v4 ON vault_entries_new(updated_at);
+"""

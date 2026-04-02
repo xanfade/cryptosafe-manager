@@ -15,13 +15,13 @@ class EntryManager:
         self.audit_logger = audit_logger
 
     def create_entry(
-        self,
-        title: str,
-        username: str,
-        password: str,
-        url: str = "",
-        notes: str = "",
-        tags: str = "",
+            self,
+            title: str,
+            username: str,
+            password: str,
+            url: str = "",
+            notes: str = "",
+            tags: str = "",
     ) -> int:
         title = clean_text(title, 120)
         username = clean_text(username, 120)
@@ -32,21 +32,28 @@ class EntryManager:
         validate_required("title", title)
         validate_required("password", password)
 
-        encrypted_password = self.crypto.encrypt(password.encode("utf-8"))
-        encrypted_notes = self.crypto.encrypt(notes.encode("utf-8")) if notes else None
-
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        encrypted_blob = self.crypto.encrypt_entry(
+            title=title,
+            username=username,
+            password=password,
+            url=url,
+            notes=notes,
+            created_at=now,
+        )
 
         with self.db.connection() as conn:
-            cursor = conn.execute(
-                """
+            cursor = conn.execute("""
                 INSERT INTO vault_entries (
-                    title, username, encrypted_password, url, notes, created_at, updated_at, tags
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (title, username, encrypted_password, url, encrypted_notes, now, now, tags),
-            )
+                    encrypted_blob,
+                    tags,
+                    updated_at
+                ) VALUES (?, ?, ?)
+            """, (
+                encrypted_blob,
+                tags,
+                now,
+            ))
             entry_id = cursor.lastrowid
             conn.commit()
 
@@ -57,45 +64,39 @@ class EntryManager:
 
     def get_all_entries(self) -> list[dict]:
         with self.db.connection() as conn:
-            rows = conn.execute(
-                """
-                SELECT id, title, username, encrypted_password, url, notes, created_at, updated_at, tags
+            rows = conn.execute("""
+                SELECT id, encrypted_blob, tags, updated_at
                 FROM vault_entries
                 ORDER BY id DESC
-                """
-            ).fetchall()
+            """).fetchall()
 
         result = []
         for row in rows:
-            decrypted_password = self.crypto.decrypt(row["encrypted_password"]).decode("utf-8")
-            decrypted_notes = (
-                self.crypto.decrypt(row["notes"]).decode("utf-8")
-                if row["notes"] else ""
-            )
-
+            payload = self.crypto.decrypt_entry(row["encrypted_blob"])
             result.append({
                 "id": row["id"],
-                "title": row["title"] or "",
-                "username": row["username"] or "",
-                "password": decrypted_password,
-                "url": row["url"] or "",
-                "notes": decrypted_notes,
-                "created_at": row["created_at"] or "",
+                "title": payload["title"],
+                "username": payload["username"],
+                "password": payload["password"],
+                "url": payload["url"],
+                "notes": payload["notes"],
+                "created_at": payload["created_at"],
                 "updated_at": row["updated_at"] or "",
                 "tags": row["tags"] or "",
+                "version": payload["version"],
             })
 
         return result
 
     def update_entry(
-        self,
-        entry_id: int,
-        title: str,
-        username: str,
-        password: str,
-        url: str = "",
-        notes: str = "",
-        tags: str = "",
+            self,
+            entry_id: int,
+            title: str,
+            username: str,
+            password: str,
+            url: str = "",
+            notes: str = "",
+            tags: str = "",
     ) -> None:
         title = clean_text(title, 120)
         username = clean_text(username, 120)
@@ -106,19 +107,39 @@ class EntryManager:
         validate_required("title", title)
         validate_required("password", password)
 
-        encrypted_password = self.crypto.encrypt(password.encode("utf-8"))
-        encrypted_notes = self.crypto.encrypt(notes.encode("utf-8")) if notes else None
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self.db.connection() as conn:
+            existing = conn.execute("""
+                SELECT encrypted_blob
+                FROM vault_entries
+                WHERE id = ?
+            """, (entry_id,)).fetchone()
+
+            if existing is None:
+                raise ValueError("Запись не найдена.")
+
+        old_payload = self.crypto.decrypt_entry(existing["encrypted_blob"])
+        updated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        encrypted_blob = self.crypto.encrypt_entry(
+            title=title,
+            username=username,
+            password=password,
+            url=url,
+            notes=notes,
+            created_at=old_payload["created_at"],
+        )
 
         with self.db.connection() as conn:
-            conn.execute(
-                """
+            conn.execute("""
                 UPDATE vault_entries
-                SET title = ?, username = ?, encrypted_password = ?, url = ?, notes = ?, updated_at = ?, tags = ?
+                SET encrypted_blob = ?, tags = ?, updated_at = ?
                 WHERE id = ?
-                """,
-                (title, username, encrypted_password, url, encrypted_notes, now, tags, entry_id),
-            )
+            """, (
+                encrypted_blob,
+                tags,
+                updated_at,
+                entry_id,
+            ))
             conn.commit()
 
         if self.event_bus:
