@@ -4,7 +4,7 @@ from tkinter import ttk, messagebox
 from src.gui.password_change_dialog import PasswordChangeDialog
 from src.gui.widgets.audit_log_viewer import AuditLogViewer
 from src.gui.login_dialog import LoginDialog
-
+from src.core.services.vault_service import VaultService
 
 class EntryDialog(tk.Toplevel):
     def __init__(self, parent, title="Добавить запись", data=None):
@@ -188,6 +188,7 @@ class MainWindow(tk.Tk):
         self.db = db
         self.key_manager = key_manager
         self.auth_service = auth_service
+        self.vault_service = VaultService(self.db, key_manager)
 
         self.rows = []
         self.locked = False
@@ -439,7 +440,7 @@ class MainWindow(tk.Tk):
             self._clear_table()
             return
 
-        self.rows = self.db.get_all_entries()
+        self.rows = self.vault_service.list_entries()
         self.refresh_table()
 
     def refresh_table(self):
@@ -491,7 +492,7 @@ class MainWindow(tk.Tk):
         self.wait_window(dialog)
 
         if dialog.result:
-            self.db.add_entry(
+            self.vault_service.add_entry(
                 title=dialog.result["title"],
                 username=dialog.result["username"],
                 password=dialog.result["password"],
@@ -520,7 +521,7 @@ class MainWindow(tk.Tk):
         self.wait_window(dialog)
 
         if dialog.result:
-            self.db.update_entry(
+            self.vault_service.update_entry(
                 entry_id=entry_id,
                 title=dialog.result["title"],
                 username=dialog.result["username"],
@@ -549,7 +550,7 @@ class MainWindow(tk.Tk):
             parent=self
         )
         if confirm:
-            self.db.delete_entry(entry_id)
+            self.vault_service.delete_entry(entry_id)
             self.load_entries()
             self.set_status("Запись удалена")
 
