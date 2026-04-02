@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+from src.core.events import EventBus
 from src.gui.password_change_dialog import PasswordChangeDialog
 from src.gui.widgets.audit_log_viewer import AuditLogViewer
 from src.gui.login_dialog import LoginDialog
@@ -589,13 +590,14 @@ class MainWindow(tk.Tk):
         self.wait_window(dialog)
 
         if dialog.result:
-            self.vault_service.add_entry(
-                title=dialog.result["title"],
-                username=dialog.result["username"],
-                password=dialog.result["password"],
-                url=dialog.result["url"],
-                notes=dialog.result["notes"]
-            )
+            self.vault_service.add_entry({
+                "title": dialog.result["title"],
+                "username": dialog.result["username"],
+                "password": dialog.result["password"],
+                "url": dialog.result["url"],
+                "notes": dialog.result["notes"],
+                "tags": dialog.result.get("tags", ""),
+            })
             self.load_entries()
             self.set_status("Запись добавлена")
 
@@ -618,14 +620,14 @@ class MainWindow(tk.Tk):
         self.wait_window(dialog)
 
         if dialog.result:
-            self.vault_service.update_entry(
-                entry_id=entry_id,
-                title=dialog.result["title"],
-                username=dialog.result["username"],
-                password=dialog.result["password"],
-                url=dialog.result["url"],
-                notes=dialog.result["notes"]
-            )
+            self.vault_service.update_entry(entry_id, {
+                "title": dialog.result["title"],
+                "username": dialog.result["username"],
+                "password": dialog.result["password"],
+                "url": dialog.result["url"],
+                "notes": dialog.result["notes"],
+                "tags": dialog.result.get("tags", ""),
+            })
             self.load_entries()
             self.table.selection_set(str(entry_id))
             self.table.focus(str(entry_id))
