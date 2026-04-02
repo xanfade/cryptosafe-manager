@@ -14,8 +14,12 @@ class PasswordGenerator:
         use_lowercase: bool = True,
         use_digits: bool = True,
         use_special: bool = True,
+        use_symbols: bool | None = None,
         exclude_ambiguous: bool = False,
     ) -> str:
+        if use_symbols is not None:
+            use_special = use_symbols
+
         if not 8 <= length <= 64:
             raise ValueError("Длина пароля должна быть в диапазоне от 8 до 64 символов.")
 
@@ -45,9 +49,7 @@ class PasswordGenerator:
             raise ValueError("Нужно выбрать хотя бы один набор символов.")
 
         if length < len(char_sets):
-            raise ValueError(
-                "Длина пароля слишком мала для выбранных наборов символов."
-            )
+            raise ValueError("Длина пароля слишком мала для выбранных наборов символов.")
 
         required_chars = [secrets.choice(char_set) for char_set in char_sets]
         all_chars = "".join(char_sets)
