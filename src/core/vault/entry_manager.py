@@ -61,16 +61,16 @@ class EntryManager:
         updated_at = created_at
 
         payload, tags = self._build_payload_from_dict(data_dict, created_at)
-        entry_blob = self.crypto.encrypt_entry_payload(payload)
+        encrypted_data = self.crypto.encrypt_entry_payload(payload)
 
         with self.db.connection() as conn:
             try:
                 cursor = conn.execute(
                     """
-                    INSERT INTO vault_entries (entry_blob, updated_at, tags)
-                    VALUES (?, ?, ?)
+                    INSERT INTO vault_entries (encrypted_data, created_at, updated_at, tags)
+                    VALUES (?, ?, ?, ?)
                     """,
-                    (entry_blob, updated_at, tags),
+                    (encrypted_data, created_at, updated_at, tags),
                 )
                 entry_id = cursor.lastrowid
                 conn.commit()
@@ -94,7 +94,7 @@ class EntryManager:
             if has_soft_delete:
                 row = conn.execute(
                     """
-                    SELECT id, entry_blob, updated_at, tags
+                    SELECT id, encrypted_data, created_at, updated_at, tags
                     FROM vault_entries
                     WHERE id = ? AND is_deleted = 0
                     """,
@@ -103,7 +103,7 @@ class EntryManager:
             else:
                 row = conn.execute(
                     """
-                    SELECT id, entry_blob, updated_at, tags
+                    SELECT id, encrypted_data, created_at, updated_at, tags
                     FROM vault_entries
                     WHERE id = ?
                     """,
@@ -113,7 +113,7 @@ class EntryManager:
         if not row:
             return None
 
-        payload = self.crypto.decrypt_entry_payload(row["entry_blob"])
+        payload = self.crypto.decrypt_entry_payload(row["encrypted_data"])
 
         return {
             "id": row["id"],
@@ -122,7 +122,7 @@ class EntryManager:
             "password": payload.get("password", ""),
             "url": payload.get("url", ""),
             "notes": payload.get("notes", ""),
-            "created_at": payload.get("created_at", ""),
+            "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "tags": row["tags"] or "",
         }
@@ -134,7 +134,7 @@ class EntryManager:
             if has_soft_delete:
                 rows = conn.execute(
                     """
-                    SELECT id, entry_blob, updated_at, tags
+                    SELECT id, encrypted_data, created_at, updated_at, tags
                     FROM vault_entries
                     WHERE is_deleted = 0
                     ORDER BY id DESC
@@ -143,7 +143,7 @@ class EntryManager:
             else:
                 rows = conn.execute(
                     """
-                    SELECT id, entry_blob, updated_at, tags
+                    SELECT id, encrypted_data, created_at, updated_at, tags
                     FROM vault_entries
                     ORDER BY id DESC
                     """
@@ -152,7 +152,7 @@ class EntryManager:
         entries: list[dict[str, Any]] = []
 
         for row in rows:
-            payload = self.crypto.decrypt_entry_payload(row["entry_blob"])
+            payload = self.crypto.decrypt_entry_payload(row["encrypted_data"])
             entries.append(
                 {
                     "id": row["id"],
@@ -161,7 +161,7 @@ class EntryManager:
                     "password": payload.get("password", ""),
                     "url": payload.get("url", ""),
                     "notes": payload.get("notes", ""),
-                    "created_at": payload.get("created_at", ""),
+                    "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                     "tags": row["tags"] or "",
                 }
@@ -176,17 +176,17 @@ class EntryManager:
 
         updated_at = self._utc_now_iso()
         payload, tags = self._build_payload_from_dict(data_dict, existing["created_at"])
-        entry_blob = self.crypto.encrypt_entry_payload(payload)
+        encrypted_data = self.crypto.encrypt_entry_payload(payload)
 
         with self.db.connection() as conn:
             try:
                 cursor = conn.execute(
                     """
                     UPDATE vault_entries
-                    SET entry_blob = ?, updated_at = ?, tags = ?
+                    SET encrypted_data = ?, updated_at = ?, tags = ?
                     WHERE id = ?
                     """,
-                    (entry_blob, updated_at, tags, entry_id),
+                    (encrypted_data, updated_at, tags, entry_id),
                 )
                 if cursor.rowcount == 0:
                     raise ValueError("Запись не найдена")
