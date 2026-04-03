@@ -30,9 +30,9 @@ class EntryManager:
         return "is_deleted" in column_names
 
     def _build_payload_from_dict(
-        self,
-        data_dict: dict[str, Any],
-        created_at: str,
+            self,
+            data_dict: dict[str, Any],
+            created_at: str,
     ) -> tuple[dict[str, Any], str]:
         title = clean_text(data_dict.get("title", ""))
         username = clean_text(data_dict.get("username", ""))

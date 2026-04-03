@@ -15,18 +15,20 @@ class EncryptionService(ABC):
         key = self.key_manager.get_encryption_key()
         if not key:
             raise ValueError("Хранилище заблокировано. Сначала выполните вход.")
-        return key
+
+        if not isinstance(key, (bytes, bytearray)):
+            raise ValueError("Ключ шифрования должен быть bytes.")
+
+        key_bytes = bytes(key)
+        if len(key_bytes) != 32:
+            raise ValueError("Ключ шифрования должен быть длиной 32 байта для AES-256.")
+
+        return key_bytes
 
     @abstractmethod
     def encrypt(self, data: bytes) -> bytes:
-        """
-        Шифрует данные, используя ключ из KeyManager.
-        """
         raise NotImplementedError
 
     @abstractmethod
     def decrypt(self, ciphertext: bytes) -> bytes:
-        """
-        Расшифровывает данные, используя ключ из KeyManager.
-        """
         raise NotImplementedError
