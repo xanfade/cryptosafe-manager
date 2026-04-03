@@ -108,6 +108,7 @@ class AuthenticationService:
 
     def auto_lock(self, reason: str = "inactivity") -> None:
         self.key_manager.clear_cache()
+        self.session.login_time = None
         self.session.last_activity_time = None
 
         if self.event_bus:
@@ -115,11 +116,29 @@ class AuthenticationService:
             self.event_bus.publish(UserLoggedOut(user="local"))
 
     def touch(self) -> None:
-        self.session.last_activity_time = time.time()
-        self.key_manager.touch_cache()
+        if self.is_unlocked():
+            now = time.time()
+            self.session.last_activity_time = now
+            self.key_manager.touch_cache()
+
+    def should_auto_lock(self) -> bool:
+        if not self.is_unlocked():
+            return False
+        return self.key_manager.is_cache_expired()
+
+    def check_auto_lock(self) -> bool:
+        if self.should_auto_lock():
+            self.auto_lock("inactivity_timeout")
+            return True
+        return False
 
     def on_app_focus_lost(self) -> None:
-        self.key_manager.on_app_focus_lost()
+        # CACHE-2: при потере фокуса приложение считается неактивным
+        if self.key_manager.cache.clear_on_focus_loss and self.is_unlocked():
+            self.auto_lock("focus_lost")
+        else:
+            self.key_manager.on_app_focus_lost()
+
         if self.event_bus:
             self.event_bus.publish(AppFocusLost())
 
@@ -129,7 +148,12 @@ class AuthenticationService:
             self.event_bus.publish(AppFocusGained())
 
     def on_app_minimized(self) -> None:
-        self.key_manager.on_app_minimized()
+        #при сворачивании приложение считается неактивным
+        if self.key_manager.cache.clear_on_minimize and self.is_unlocked():
+            self.auto_lock("app_minimized")
+        else:
+            self.key_manager.on_app_minimized()
+
         if self.event_bus:
             self.event_bus.publish(AppMinimized())
 

@@ -714,14 +714,15 @@ class MainWindow(tk.Tk):
         if self.auth_service and self.auth_service.is_unlocked():
             self.auth_service.touch()
 
-    def _on_focus_out(self, event=None):
-        if not self.auth_service or not self.auth_service.is_unlocked():
+    def _handle_real_focus_loss(self):
+        # Если фокус всё ещё внутри этого окна, ничего не делаем
+        current = self.focus_displayof()
+        if current is not None:
             return
 
-        if self._focus_out_job is not None:
-            self.after_cancel(self._focus_out_job)
-
-        self._focus_out_job = self.after(200, self._apply_focus_out)
+        if self.auth_service and self.auth_service.is_unlocked():
+            self.auth_service.on_app_focus_lost()
+            self.apply_locked_state()
 
     def _apply_focus_out(self):
         self._focus_out_job = None
@@ -748,47 +749,26 @@ class MainWindow(tk.Tk):
             self.apply_locked_state()
 
     def _on_focus_in(self, event=None):
-        if self._focus_out_job is not None:
-            self.after_cancel(self._focus_out_job)
-            self._focus_out_job = None
-
         if self.auth_service:
-            try:
-                self.auth_service.on_app_focus_gained()
-            except Exception:
-                pass
+            self.auth_service.on_app_focus_gained()
 
     def _on_unmap(self, event=None):
-        try:
-            if self.state() == "iconic":
-                self._is_minimized = True
-                if self.auth_service and self.auth_service.is_unlocked():
-                    try:
-                        self.auth_service.on_app_minimized()
-                    except Exception:
-                        pass
-                    self.apply_locked_state()
-        except Exception:
-            pass
+        # Блокируем только при реальном сворачивании окна
+        if self.state() == "iconic" and self.auth_service and self.auth_service.is_unlocked():
+            self.auth_service.on_app_minimized()
+            self.apply_locked_state()
 
     def _on_map(self, event=None):
-        if self._is_minimized:
-            self._is_minimized = False
-            if self.auth_service:
-                try:
-                    self.auth_service.on_app_restored()
-                except Exception:
-                    pass
+        if self.auth_service:
+            self.auth_service.on_app_restored()
 
     def _poll_session_state(self):
-        if self.auth_service:
-            unlocked = self.auth_service.is_unlocked()
-            if unlocked and self.locked:
-                self.apply_unlocked_state()
-            elif not unlocked and not self.locked:
+        try:
+            if self.auth_service and self.auth_service.check_auto_lock():
                 self.apply_locked_state()
-
-        self.after(1000, self._poll_session_state)
+                return
+        finally:
+            self.after(1000, self._poll_session_state)
 
     def on_close(self):
         if self.auth_service:
