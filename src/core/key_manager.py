@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from datetime import datetime, timezone
 
 from src.core.crypto.key_derivation import (
@@ -13,6 +12,14 @@ from src.database.db import Database
 
 
 class KeyManager:
+    REQUIRED_KEY_TYPES = {
+        "auth_hash",
+        "auth_salt",
+        "enc_salt",
+        "argon2_params",
+        "pbkdf2_params",
+    }
+
     def __init__(
         self,
         db: Database,
@@ -51,7 +58,67 @@ class KeyManager:
                 """,
                 (key_type,),
             ).fetchone()
-            return row
+        return row
+
+    def _insert_key_bundle(self, bundle: dict[str, bytes], version: int) -> None:
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        with self.db.connection() as conn:
+            for key_type, key_data in bundle.items():
+                conn.execute(
+                    """
+                    INSERT INTO key_store(key_type, key_data, version, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (key_type, key_data, version, now),
+                )
+            conn.commit()
+
+    def _get_latest_complete_version(self, conn) -> int | None:
+        rows = conn.execute(
+            """
+            SELECT version, COUNT(DISTINCT key_type) AS cnt
+            FROM key_store
+            WHERE key_type IN ('auth_hash', 'auth_salt', 'enc_salt', 'argon2_params', 'pbkdf2_params')
+            GROUP BY version
+            HAVING cnt = 5
+            ORDER BY version DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+        if rows is None:
+            return None
+
+        return int(rows["version"])
+
+    def _load_bundle_by_version(self, version: int) -> dict:
+        with self.db.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT key_type, key_data
+                FROM key_store
+                WHERE version = ?
+                """,
+                (version,),
+            ).fetchall()
+
+        bundle = {row["key_type"]: row["key_data"] for row in rows}
+
+        missing = self.REQUIRED_KEY_TYPES - set(bundle.keys())
+        if missing:
+            raise RuntimeError(
+                f"Версия key bundle {version} неполная. Отсутствуют: {', '.join(sorted(missing))}"
+            )
+
+        return {
+            "auth_hash": bundle["auth_hash"],
+            "auth_salt": bundle["auth_salt"],
+            "enc_salt": bundle["enc_salt"],
+            "argon2_params": Argon2Params.from_json(bundle["argon2_params"]),
+            "pbkdf2_params": PBKDF2Params.from_json(bundle["pbkdf2_params"]),
+            "version": version,
+        }
 
     def initialize_master_password(self, password: str) -> None:
         argon2_params = Argon2Params()
@@ -59,35 +126,45 @@ class KeyManager:
 
         auth_salt = generate_salt(argon2_params.salt_len)
         enc_salt = generate_salt(pbkdf2_params.salt_len)
-
         auth_hash = derive_auth_hash(password, auth_salt, argon2_params)
 
-        self._insert_key_record("auth_hash", auth_hash, 1)
-        self._insert_key_record("auth_salt", auth_salt, 1)
-        self._insert_key_record("enc_salt", enc_salt, 1)
-        self._insert_key_record("argon2_params", argon2_params.to_json(), 1)
-        self._insert_key_record("pbkdf2_params", pbkdf2_params.to_json(), 1)
+        bundle = {
+            "auth_hash": auth_hash,
+            "auth_salt": auth_salt,
+            "enc_salt": enc_salt,
+            "argon2_params": argon2_params.to_json(),
+            "pbkdf2_params": pbkdf2_params.to_json(),
+        }
+
+        with self.db.connection() as conn:
+            version = self.get_next_version(conn)
+            for key_type, key_data in bundle.items():
+                conn.execute(
+                    """
+                    INSERT INTO key_store(key_type, key_data, version, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        key_type,
+                        key_data,
+                        version,
+                        datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    ),
+                )
+            conn.commit()
 
     def is_initialized(self) -> bool:
-        return self._get_latest_key_record("auth_hash") is not None
+        with self.db.connection() as conn:
+            return self._get_latest_complete_version(conn) is not None
 
     def load_bundle(self) -> dict:
-        auth_hash = self._get_latest_key_record("auth_hash")
-        auth_salt = self._get_latest_key_record("auth_salt")
-        enc_salt = self._get_latest_key_record("enc_salt")
-        argon2_params = self._get_latest_key_record("argon2_params")
-        pbkdf2_params = self._get_latest_key_record("pbkdf2_params")
+        with self.db.connection() as conn:
+            version = self._get_latest_complete_version(conn)
 
-        if not all([auth_hash, auth_salt, enc_salt, argon2_params, pbkdf2_params]):
+        if version is None:
             raise RuntimeError("Хранилище ключей не инициализировано полностью")
 
-        return {
-            "auth_hash": auth_hash[0],
-            "auth_salt": auth_salt[0],
-            "enc_salt": enc_salt[0],
-            "argon2_params": Argon2Params.from_json(argon2_params[0]),
-            "pbkdf2_params": PBKDF2Params.from_json(pbkdf2_params[0]),
-        }
+        return self._load_bundle_by_version(version)
 
     def cache_encryption_key(self, key: bytes) -> None:
         self.cache.put(key)
