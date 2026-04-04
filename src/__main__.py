@@ -1,6 +1,7 @@
 import traceback
 import tkinter as tk
 
+from src.core.audit_logger import AuditLogger
 from src.core.config import ConfigManager
 from src.core.events import EventBus
 from src.core.key_manager import KeyManager
@@ -40,13 +41,16 @@ def main():
     db.migrate()
 
     event_bus = EventBus()
+
+    audit_logger = AuditLogger(db)
+    audit_logger.subscribe(event_bus)
+
     key_manager = KeyManager(db)
     auth_service = AuthenticationService(key_manager, event_bus=event_bus)
 
     if key_manager.is_initialized():
         login = LoginDialog(root, auth_service)
         root.wait_window(login)
-
         if not login.result:
             root.destroy()
             return
@@ -57,6 +61,7 @@ def main():
         db=db,
         key_manager=key_manager,
         auth_service=auth_service,
+        event_bus=event_bus,
     )
     app.mainloop()
 

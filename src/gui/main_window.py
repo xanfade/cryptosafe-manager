@@ -280,13 +280,14 @@ class EntryDialog(tk.Toplevel):
 
 
 class MainWindow(tk.Tk):
-    def __init__(self, db=None, key_manager=None, auth_service=None):
+    def __init__(self, db=None, key_manager=None, auth_service=None,event_bus=None):
         super().__init__()
 
+        self.event_bus = event_bus
         self.db = db
         self.key_manager = key_manager
         self.auth_service = auth_service
-        self.vault_service = VaultService(self.db, key_manager)
+        self.vault_service = VaultService(db=self.db, key_manager=self.key_manager,event_bus=self.event_bus)
 
         self.rows = []
         self.locked = False
