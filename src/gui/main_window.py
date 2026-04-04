@@ -201,16 +201,6 @@ class EntryDialog(tk.Toplevel):
             self.fields["password"].config(show="*")
             self.toggle_password_btn.config(text="Показать")
 
-    def toggle_password_visibility(self):
-        self.password_visible = not self.password_visible
-
-        if self.password_visible:
-            self.fields["password"].config(show="")
-            self.toggle_password_btn.config(text="Скрыть")
-        else:
-            self.fields["password"].config(show="*")
-            self.toggle_password_btn.config(text="Показать")
-
     def _create_entry(self, parent, row, value=""):
         entry = tk.Entry(
             parent,
@@ -292,6 +282,7 @@ class MainWindow(tk.Tk):
         self.rows = []
         self.locked = False
         self._is_minimized = False
+        self._has_focus = True
         self._focus_out_job = None
         self._poll_job = None
 
@@ -716,56 +707,47 @@ class MainWindow(tk.Tk):
             self.auth_service.touch()
 
     def _on_focus_out(self, event=None):
-        # Даём Tkinter время обновить текущий фокус
-        self.after(50, self._handle_real_focus_loss)
+        if self._focus_out_job is not None:
+            self.after_cancel(self._focus_out_job)
+
+        self._focus_out_job = self.after(50, self._handle_real_focus_loss)
 
     def _handle_real_focus_loss(self):
-        # Если фокус всё ещё внутри этого окна, ничего не делаем
+        self._focus_out_job = None
+
         current = self.focus_displayof()
         if current is not None:
             return
+
+        if not self._has_focus:
+            return
+
+        self._has_focus = False
 
         if self.auth_service and self.auth_service.is_unlocked():
             self.auth_service.on_app_focus_lost()
             self.apply_locked_state()
 
-    def _apply_focus_out(self):
-        self._focus_out_job = None
-
-        try:
-            current_focus = self.focus_displayof()
-        except Exception:
-            current_focus = None
-
-        # Если фокус всё ещё внутри нашего приложения, не блокируем
-        if current_focus is not None:
-            try:
-                top = current_focus.winfo_toplevel()
-                if top is self or isinstance(top, tk.Toplevel):
-                    return
-            except Exception:
-                return
-
-        if self.auth_service and self.auth_service.is_unlocked():
-            try:
-                self.auth_service.on_app_focus_lost()
-            except Exception:
-                pass
-            self.apply_locked_state()
-
     def _on_focus_in(self, event=None):
-        if self.auth_service:
-            self.auth_service.on_app_focus_gained()
+        if not self._has_focus:
+            self._has_focus = True
+            if self.auth_service:
+                self.auth_service.on_app_focus_gained()
 
     def _on_unmap(self, event=None):
-        # Блокируем только при реальном сворачивании окна
-        if self.state() == "iconic" and self.auth_service and self.auth_service.is_unlocked():
-            self.auth_service.on_app_minimized()
-            self.apply_locked_state()
+        if self.state() == "iconic" and not self._is_minimized:
+            self._is_minimized = True
+
+            if self.auth_service and self.auth_service.is_unlocked():
+                self.auth_service.on_app_minimized()
+                self.apply_locked_state()
 
     def _on_map(self, event=None):
-        if self.auth_service:
-            self.auth_service.on_app_restored()
+        if self._is_minimized:
+            self._is_minimized = False
+
+            if self.auth_service:
+                self.auth_service.on_app_restored()
 
     def _poll_session_state(self):
         try:

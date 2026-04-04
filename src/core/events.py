@@ -29,6 +29,13 @@ class UserLoggedOut:
 
 
 @dataclass
+class LoginFailed:
+    user: str = "local"
+    failed_attempts: int = 0
+    delay_seconds: int = 0
+
+
+@dataclass
 class ClipboardCopied:
     entry_id: int
 
@@ -74,7 +81,9 @@ class EventBus:
 
     def publish(self, event: Any):
         et = type(event)
+
         for h in self._sync.get(et, []):
             h(event)
+
         for h in self._async.get(et, []):
             self._pool.submit(h, event)

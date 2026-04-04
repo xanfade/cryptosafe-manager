@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import re
 import time
 
@@ -14,10 +13,12 @@ from src.core.events import (
     AppRestored,
     AutoLocked,
     EventBus,
+    LoginFailed,
     UserLoggedIn,
     UserLoggedOut,
 )
 from src.core.state_manager import StateManager
+
 
 COMMON_PASSWORDS = {
     "password123",
@@ -72,9 +73,21 @@ class AuthenticationService:
             expected_hash=bundle["auth_hash"],
             params=bundle["argon2_params"],
         )
+
         if not ok:
             self.state.register_failed_attempt()
-            time.sleep(self._delay_for_failures())
+            delay = self._delay_for_failures()
+
+            if self.event_bus:
+                self.event_bus.publish(
+                    LoginFailed(
+                        user="local",
+                        failed_attempts=self.state.session.failed_attempts,
+                        delay_seconds=delay,
+                    )
+                )
+
+            time.sleep(delay)
             raise ValueError("Неверный мастер-пароль")
 
         enc_key = derive_encryption_key(
@@ -82,8 +95,8 @@ class AuthenticationService:
             salt=bundle["enc_salt"],
             params=bundle["pbkdf2_params"],
         )
-        self.key_manager.cache_encryption_key(enc_key)
 
+        self.key_manager.cache_encryption_key(enc_key)
         self.state.unlock(user="local")
 
         if self.event_bus:
@@ -114,10 +127,8 @@ class AuthenticationService:
     def should_auto_lock(self) -> bool:
         if not self.is_unlocked():
             return False
-
         if self.state.is_inactive():
             return True
-
         return self.key_manager.is_cache_expired()
 
     def check_auto_lock(self) -> bool:
@@ -129,6 +140,7 @@ class AuthenticationService:
     def on_app_focus_lost(self) -> None:
         if self.key_manager.cache.clear_on_focus_loss and self.is_unlocked():
             self.auto_lock("focus_lost")
+
         else:
             self.key_manager.on_app_focus_lost()
 
@@ -144,6 +156,7 @@ class AuthenticationService:
     def on_app_minimized(self) -> None:
         if self.key_manager.cache.clear_on_minimize and self.is_unlocked():
             self.auto_lock("app_minimized")
+
         else:
             self.key_manager.on_app_minimized()
 
