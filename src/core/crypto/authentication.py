@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass
 
 from src.core.crypto.key_derivation import (
     derive_encryption_key,
@@ -18,6 +17,7 @@ from src.core.events import (
     UserLoggedIn,
     UserLoggedOut,
 )
+from src.core.state_manager import StateManager
 
 COMMON_PASSWORDS = {
     "password123",
@@ -44,21 +44,19 @@ def validate_password_strength(password: str) -> None:
         raise ValueError("Слишком распространённый пароль")
 
 
-@dataclass
-class SessionInfo:
-    login_time: float | None = None
-    last_activity_time: float | None = None
-    failed_attempts: int = 0
-
-
 class AuthenticationService:
-    def __init__(self, key_manager, event_bus: EventBus | None = None):
+    def __init__(
+        self,
+        key_manager,
+        state_manager: StateManager,
+        event_bus: EventBus | None = None,
+    ):
         self.key_manager = key_manager
+        self.state = state_manager
         self.event_bus = event_bus
-        self.session = SessionInfo()
 
     def _delay_for_failures(self) -> int:
-        n = self.session.failed_attempts
+        n = self.state.session.failed_attempts
         if n <= 2:
             return 1
         if n <= 4:
@@ -74,9 +72,8 @@ class AuthenticationService:
             expected_hash=bundle["auth_hash"],
             params=bundle["argon2_params"],
         )
-
         if not ok:
-            self.session.failed_attempts += 1
+            self.state.register_failed_attempt()
             time.sleep(self._delay_for_failures())
             raise ValueError("Неверный мастер-пароль")
 
@@ -85,13 +82,9 @@ class AuthenticationService:
             salt=bundle["enc_salt"],
             params=bundle["pbkdf2_params"],
         )
-
         self.key_manager.cache_encryption_key(enc_key)
 
-        now = time.time()
-        self.session.login_time = now
-        self.session.last_activity_time = now
-        self.session.failed_attempts = 0
+        self.state.unlock(user="local")
 
         if self.event_bus:
             self.event_bus.publish(UserLoggedIn(user="local"))
@@ -100,16 +93,14 @@ class AuthenticationService:
 
     def logout(self) -> None:
         self.key_manager.clear_cache()
-        self.session.login_time = None
-        self.session.last_activity_time = None
+        self.state.lock()
 
         if self.event_bus:
             self.event_bus.publish(UserLoggedOut(user="local"))
 
     def auto_lock(self, reason: str = "inactivity") -> None:
         self.key_manager.clear_cache()
-        self.session.login_time = None
-        self.session.last_activity_time = None
+        self.state.lock()
 
         if self.event_bus:
             self.event_bus.publish(AutoLocked(reason=reason))
@@ -117,13 +108,16 @@ class AuthenticationService:
 
     def touch(self) -> None:
         if self.is_unlocked():
-            now = time.time()
-            self.session.last_activity_time = now
+            self.state.touch_activity()
             self.key_manager.touch_cache()
 
     def should_auto_lock(self) -> bool:
         if not self.is_unlocked():
             return False
+
+        if self.state.is_inactive():
+            return True
+
         return self.key_manager.is_cache_expired()
 
     def check_auto_lock(self) -> bool:
@@ -133,7 +127,6 @@ class AuthenticationService:
         return False
 
     def on_app_focus_lost(self) -> None:
-        # CACHE-2: при потере фокуса приложение считается неактивным
         if self.key_manager.cache.clear_on_focus_loss and self.is_unlocked():
             self.auto_lock("focus_lost")
         else:
@@ -144,11 +137,11 @@ class AuthenticationService:
 
     def on_app_focus_gained(self) -> None:
         self.key_manager.on_app_focus_gained()
+
         if self.event_bus:
             self.event_bus.publish(AppFocusGained())
 
     def on_app_minimized(self) -> None:
-        #при сворачивании приложение считается неактивным
         if self.key_manager.cache.clear_on_minimize and self.is_unlocked():
             self.auto_lock("app_minimized")
         else:
@@ -159,8 +152,9 @@ class AuthenticationService:
 
     def on_app_restored(self) -> None:
         self.key_manager.on_app_restored()
+
         if self.event_bus:
             self.event_bus.publish(AppRestored())
 
     def is_unlocked(self) -> bool:
-        return self.key_manager.has_cached_key()
+        return self.state.is_unlocked() and self.key_manager.has_cached_key()

@@ -1,3 +1,5 @@
+import base64
+import os
 import traceback
 import tkinter as tk
 
@@ -6,10 +8,12 @@ from src.core.config import ConfigManager
 from src.core.events import EventBus
 from src.core.key_manager import KeyManager
 from src.core.crypto.authentication import AuthenticationService
-from src.gui.setup_wizard import SetupWizard
+from src.core.settings_repo import SettingsService
+from src.core.state_manager import StateManager
+from src.database.db import Database
 from src.gui.login_dialog import LoginDialog
 from src.gui.main_window import MainWindow
-from src.database.db import Database
+from src.gui.setup_wizard import SetupWizard
 
 
 def main():
@@ -46,12 +50,41 @@ def main():
     audit_logger.subscribe(event_bus)
 
     key_manager = KeyManager(db)
-    auth_service = AuthenticationService(key_manager, event_bus=event_bus)
+
+    state_manager = StateManager()
+
+    settings_key_b64 = cfg.get("settings_secret_key")
+    if not settings_key_b64:
+        raw_settings_key = os.urandom(32)
+        settings_key_b64 = base64.b64encode(raw_settings_key).decode("utf-8")
+        cfg.set("settings_secret_key", settings_key_b64)
+        cfg.save()
+    else:
+        raw_settings_key = base64.b64decode(settings_key_b64)
+
+    if len(raw_settings_key) != 32:
+        raise ValueError("settings_secret_key должен декодироваться ровно в 32 байта")
+
+    fernet_key = SettingsService.build_fernet_key(raw_settings_key)
+    settings_service = SettingsService(db, fernet_key)
+
+    timeout_raw = settings_service.get("security.auto_lock_timeout_sec", "900")
+    try:
+        state_manager.set_inactivity_timeout(int(timeout_raw))
+    except (TypeError, ValueError):
+        state_manager.set_inactivity_timeout(900)
+
+    auth_service = AuthenticationService(
+        key_manager=key_manager,
+        state_manager=state_manager,
+        event_bus=event_bus,
+    )
 
     if key_manager.is_initialized():
         login = LoginDialog(root, auth_service)
         root.wait_window(login)
-        if not login.result:
+
+        if not getattr(login, "result", None):
             root.destroy()
             return
 

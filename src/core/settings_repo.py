@@ -1,27 +1,51 @@
-from src.core.crypto.placeholder import AES256Placeholder
-from src.database.db import Database
+from __future__ import annotations
+
+import base64
+from cryptography.fernet import Fernet, InvalidToken
 
 
-class SettingsRepository:
-    """
-    CFG-2: Все настройки в таблице settings.
-    - encrypted=0 -> хранится как обычный текст
-    - encrypted=1 -> значение шифруется (Sprint 1 XOR-заглушка)
-    """
+class SettingsService:
 
-    def __init__(self, db: Database, key: bytes):
+
+    def __init__(self, db, secret_key: bytes):
         self.db = db
-        self.key = key
-        self.crypto = AES256Placeholder()
+        self.fernet = Fernet(secret_key)
 
-    def set(self, setting_key: str, value: str, encrypted: bool = False):
+    @staticmethod
+    def build_fernet_key(raw_key: bytes) -> bytes:
+        if len(raw_key) != 32:
+            raise ValueError("Секретный ключ настроек должен быть длиной 32 байта")
+        return base64.urlsafe_b64encode(raw_key)
+
+    def get(self, key: str, default=None):
+        with self.db.connection() as conn:
+            row = conn.execute(
+                "SELECT setting_value, encrypted FROM settings WHERE setting_key = ?",
+                (key,),
+            ).fetchone()
+
+        if row is None:
+            return default
+
+        value = row["setting_value"]
+        encrypted = int(row["encrypted"] or 0)
+
+        if not encrypted:
+            return value
+
+        try:
+            decrypted = self.fernet.decrypt(value.encode("utf-8"))
+            return decrypted.decode("utf-8")
+        except (InvalidToken, UnicodeDecodeError):
+            raise ValueError(f"Не удалось расшифровать настройку: {key}")
+
+    def set(self, key: str, value: str, encrypted: bool = False):
+        stored_value = value
+        encrypted_flag = 1 if encrypted else 0
+
         if encrypted:
-            enc = self.crypto.encrypt(value.encode("utf-8"), self.key)
-            store_value = enc.hex()  # храним как hex-строку (удобно в TEXT)
-            enc_flag = 1
-        else:
-            store_value = value
-            enc_flag = 0
+            token = self.fernet.encrypt(str(value).encode("utf-8"))
+            stored_value = token.decode("utf-8")
 
         with self.db.connection() as conn:
             conn.execute(
@@ -29,27 +53,9 @@ class SettingsRepository:
                 INSERT INTO settings(setting_key, setting_value, encrypted)
                 VALUES (?, ?, ?)
                 ON CONFLICT(setting_key) DO UPDATE SET
-                  setting_value=excluded.setting_value,
-                  encrypted=excluded.encrypted
+                    setting_value = excluded.setting_value,
+                    encrypted = excluded.encrypted
                 """,
-                (setting_key, store_value, enc_flag),
+                (key, stored_value, encrypted_flag),
             )
             conn.commit()
-
-    def get(self, setting_key: str, default: str | None = None) -> str | None:
-        with self.db.connection() as conn:
-            row = conn.execute(
-                "SELECT setting_value, encrypted FROM settings WHERE setting_key=?",
-                (setting_key,),
-            ).fetchone()
-
-        if row is None:
-            return default
-
-        value, enc_flag = row
-        if enc_flag == 1 and value is not None:
-            raw = bytes.fromhex(value)
-            dec = self.crypto.decrypt(raw, self.key)
-            return dec.decode("utf-8")
-
-        return value
