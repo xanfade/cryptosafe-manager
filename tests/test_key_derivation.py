@@ -1,6 +1,5 @@
 import time
 import statistics
-import pytest
 
 from src.core.crypto.key_derivation import (
     Argon2Params,
@@ -25,12 +24,26 @@ def test_argon2_different_valid_params_produce_valid_hashes():
     hashes = []
     for params in params_list:
         h = derive_auth_hash(password, salt, params)
+
         assert isinstance(h, bytes)
         assert len(h) == params.hash_len
         assert verify_auth_hash(password, salt, h, params) is True
+
         hashes.append(h)
 
     assert len(set(hashes)) == len(hashes)
+
+
+def test_pbkdf2_consistency_100_times():
+    password = "StrongPass123!"
+    salt = b"0123456789abcdef"
+    params = PBKDF2Params(iterations=100_000, dklen=32)
+
+    first = derive_encryption_key(password, salt, params)
+
+    for _ in range(100):
+        derived = derive_encryption_key(password, salt, params)
+        assert derived == first
 
 
 def test_compare_digest_timing_regression():
@@ -41,7 +54,7 @@ def test_compare_digest_timing_regression():
 
     expected_hash = derive_auth_hash(password, salt, params)
 
-    # небольшой прогрев
+    # Небольшой прогрев
     verify_auth_hash(password, salt, expected_hash, params)
     verify_auth_hash(wrong_password, salt, expected_hash, params)
 
@@ -60,8 +73,8 @@ def test_compare_digest_timing_regression():
     ok_avg = statistics.mean(ok_times)
     bad_avg = statistics.mean(bad_times)
 
-    # это не математическое доказательство constant-time,
-    # а регрессионная проверка, что нет сильного перекоса
+    # Это не математическое доказательство constant-time,
+    # а регрессионная проверка без сильного перекоса
     ratio = abs(ok_avg - bad_avg) / max(ok_avg, bad_avg)
     assert ratio < 0.15
 
@@ -71,9 +84,10 @@ def test_secure_cache_clear_zeroizes_underlying_bytearray():
 
     cache = SecureKeyCache()
     secret = b"1234567890abcdef1234567890abcdef"
-    cache.put(secret)
 
+    cache.put(secret)
     assert cache._entry is not None
+
     raw_before_clear = cache._entry.value
     assert isinstance(raw_before_clear, bytearray)
     assert bytes(raw_before_clear) == secret

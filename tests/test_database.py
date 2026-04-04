@@ -1,7 +1,7 @@
 def test_db_schema_exists(test_db):
     with test_db.connection() as c:
         v = c.execute("PRAGMA user_version;").fetchone()[0]
-        assert v == 3
+        assert v == 4
 
         tables = {
             row[0]
