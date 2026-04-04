@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
+import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
+
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from src.core.crypto.authentication import validate_password_strength
 from src.core.crypto.key_derivation import (
@@ -11,10 +16,9 @@ from src.core.crypto.key_derivation import (
     PBKDF2Params,
     derive_auth_hash,
     derive_encryption_key,
-    verify_auth_hash,
     generate_salt,
+    verify_auth_hash,
 )
-from src.core.crypto.vault_crypto import encrypt_record, decrypt_record
 
 
 @dataclass
@@ -27,9 +31,12 @@ class RotationProgress:
 
 
 class PasswordRotationService:
+    NONCE_SIZE = 12
+
     def __init__(self, db, key_manager):
         self.db = db
         self.key_manager = key_manager
+
         self._pause_event = threading.Event()
         self._pause_event.set()
         self._cancel_requested = False
@@ -49,37 +56,102 @@ class PasswordRotationService:
         if self._cancel_requested:
             raise RuntimeError("Операция отменена пользователем")
 
-    def _decrypt_or_legacy_plaintext(self, old_enc_key: bytes, value) -> str:
-        """
-        Поддержка двух форматов:
-        1) нормальный XOR-шифротекст
-        2) старые legacy-данные, сохранённые как обычные utf-8 bytes
-        """
-        if value is None:
-            return ""
+    def _emit_progress(
+        self,
+        progress_cb: Callable[[RotationProgress], None] | None,
+        phase: str,
+        current: int,
+        total: int,
+        message: str,
+    ) -> None:
+        if progress_cb is None:
+            return
 
-        if isinstance(value, str):
-            return value
+        percent = 100.0 if total == 0 else (current / total) * 100.0
+        progress_cb(
+            RotationProgress(
+                phase=phase,
+                current=current,
+                total=total,
+                percent=percent,
+                message=message,
+            )
+        )
 
-        if not isinstance(value, (bytes, bytearray)):
-            return str(value)
+    def _ensure_v4_schema(self, conn) -> None:
+        columns_info = conn.execute("PRAGMA table_info(vault_entries)").fetchall()
+        column_names = {row["name"] for row in columns_info}
 
-        raw = bytes(value)
-        if not raw:
-            return ""
+        required = {"id", "encrypted_data", "created_at", "updated_at", "tags"}
+        missing = required - column_names
+        if missing:
+            raise ValueError(
+                "Текущая схема vault_entries не поддерживает ротацию пароля. "
+                f"Отсутствуют поля: {', '.join(sorted(missing))}"
+            )
 
-        # Сначала пробуем как нормальный шифротекст
+    def _normalize_payload(self, payload: dict) -> dict:
+        if not isinstance(payload, dict):
+            raise ValueError("Расшифрованные данные записи должны быть словарем.")
+
+        normalized = {
+            "title": payload.get("title", "") or "",
+            "username": payload.get("username", "") or "",
+            "password": payload.get("password", "") or "",
+            "url": payload.get("url", "") or "",
+            "notes": payload.get("notes", "") or "",
+            "created_at": payload.get("created_at", "") or "",
+            "version": payload.get("version", 1),
+        }
+
+        required = ["title", "username", "password", "version"]
+        missing = [field for field in required if normalized.get(field, "") == ""]
+        if missing:
+            raise ValueError(
+                "В payload отсутствуют обязательные поля: "
+                + ", ".join(missing)
+            )
+
+        return normalized
+
+    def _decrypt_entry_payload_with_key(self, encrypted_data: bytes, key: bytes) -> dict:
+        if not encrypted_data or len(encrypted_data) <= self.NONCE_SIZE:
+            raise ValueError("Некорректные зашифрованные данные записи.")
+
+        nonce = encrypted_data[:self.NONCE_SIZE]
+        ciphertext = encrypted_data[self.NONCE_SIZE:]
+
+        aesgcm = AESGCM(key)
         try:
-            return decrypt_record(old_enc_key, raw)
-        except UnicodeDecodeError:
-            # Если это не шифротекст, пробуем как старые plain utf-8 bytes
-            try:
-                return raw.decode("utf-8")
-            except UnicodeDecodeError:
-                raise ValueError(
-                    "Обнаружены повреждённые или несовместимые данные в vault_entries. "
-                    "Невозможно безопасно выполнить ротацию."
-                )
+            plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+        except InvalidTag as exc:
+            raise ValueError(
+                "Не удалось расшифровать запись старым ключом. "
+                "Данные повреждены или текущий пароль неверный."
+            ) from exc
+
+        try:
+            payload = json.loads(plaintext.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                "Расшифрованные данные записи имеют некорректный формат."
+            ) from exc
+
+        return self._normalize_payload(payload)
+
+    def _encrypt_entry_payload_with_key(self, payload: dict, key: bytes) -> bytes:
+        normalized = self._normalize_payload(payload)
+
+        plaintext = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+        nonce = os.urandom(self.NONCE_SIZE)
+        aesgcm = AESGCM(key)
+        ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+        return nonce + ciphertext
 
     def rotate_password(
         self,
@@ -87,6 +159,12 @@ class PasswordRotationService:
         new_password: str,
         progress_cb: Callable[[RotationProgress], None] | None = None,
     ) -> None:
+        self._cancel_requested = False
+
+        if not current_password:
+            raise ValueError("Введите текущий пароль")
+        if not new_password:
+            raise ValueError("Введите новый пароль")
         if current_password == new_password:
             raise ValueError("Новый пароль должен отличаться от текущего")
 
@@ -94,13 +172,13 @@ class PasswordRotationService:
 
         bundle = self.key_manager.load_bundle()
 
-        ok = verify_auth_hash(
+        is_valid = verify_auth_hash(
             password=current_password,
             salt=bundle["auth_salt"],
             expected_hash=bundle["auth_hash"],
             params=bundle["argon2_params"],
         )
-        if not ok:
+        if not is_valid:
             raise ValueError("Текущий пароль введён неверно")
 
         old_enc_key = derive_encryption_key(
@@ -129,73 +207,65 @@ class PasswordRotationService:
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
         with self.db.connection() as conn:
+            self._ensure_v4_schema(conn)
+
             conn.execute("BEGIN IMMEDIATE")
             try:
                 rows = conn.execute(
                     """
-                    SELECT id, encrypted_password, notes
+                    SELECT id, encrypted_data
                     FROM vault_entries
                     ORDER BY id
                     """
                 ).fetchall()
 
                 total = len(rows)
+                self._emit_progress(
+                    progress_cb,
+                    phase="scan",
+                    current=0,
+                    total=total,
+                    message="Подготовка к перешифрованию",
+                )
 
-                if progress_cb:
-                    progress_cb(
-                        RotationProgress(
-                            phase="scan",
-                            current=0,
-                            total=total,
-                            percent=0.0,
-                            message="Подготовка к перешифрованию",
-                        )
-                    )
-
-                updated_rows = []
+                updated_rows: list[tuple[bytes, str, int]] = []
 
                 for i, row in enumerate(rows, start=1):
                     self._wait_if_paused()
 
-                    entry_id, encrypted_password, notes = row
+                    entry_id = row["id"]
+                    encrypted_data = row["encrypted_data"]
 
-                    plain_password = self._decrypt_or_legacy_plaintext(old_enc_key, encrypted_password)
-                    plain_notes = self._decrypt_or_legacy_plaintext(old_enc_key, notes)
-
-                    new_encrypted_password = encrypt_record(new_enc_key, plain_password) if plain_password else b""
-                    new_encrypted_notes = encrypt_record(new_enc_key, plain_notes) if plain_notes else b""
-
-                    updated_rows.append(
-                        (
-                            new_encrypted_password,
-                            new_encrypted_notes,
-                            entry_id,
-                        )
+                    payload = self._decrypt_entry_payload_with_key(
+                        encrypted_data=encrypted_data,
+                        key=old_enc_key,
+                    )
+                    reencrypted_data = self._encrypt_entry_payload_with_key(
+                        payload=payload,
+                        key=new_enc_key,
                     )
 
-                    if progress_cb:
-                        percent = (i / total * 100.0) if total else 100.0
-                        progress_cb(
-                            RotationProgress(
-                                phase="reencrypt",
-                                current=i,
-                                total=total,
-                                percent=percent,
-                                message=f"Перешифровано записей: {i}/{total}",
-                            )
-                        )
+                    updated_rows.append((reencrypted_data, now, entry_id))
 
-                conn.executemany(
-                    """
-                    UPDATE vault_entries
-                    SET encrypted_password = ?, notes = ?
-                    WHERE id = ?
-                    """,
-                    updated_rows,
-                )
+                    self._emit_progress(
+                        progress_cb,
+                        phase="reencrypt",
+                        current=i,
+                        total=total,
+                        message=f"Перешифровано записей: {i}/{total}",
+                    )
+
+                if updated_rows:
+                    conn.executemany(
+                        """
+                        UPDATE vault_entries
+                        SET encrypted_data = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        updated_rows,
+                    )
 
                 next_version = self.key_manager.get_next_version(conn)
-
                 key_rows = [
                     ("auth_hash", new_auth_hash, next_version, now),
                     ("auth_salt", new_auth_salt, next_version, now),
@@ -220,13 +290,10 @@ class PasswordRotationService:
 
         self.key_manager.cache_encryption_key(new_enc_key)
 
-        if progress_cb:
-            progress_cb(
-                RotationProgress(
-                    phase="done",
-                    current=1,
-                    total=1,
-                    percent=100.0,
-                    message="Смена пароля завершена",
-                )
-            )
+        self._emit_progress(
+            progress_cb,
+            phase="done",
+            current=1,
+            total=1,
+            message="Смена пароля завершена",
+        )
