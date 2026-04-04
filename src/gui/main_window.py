@@ -714,6 +714,10 @@ class MainWindow(tk.Tk):
         if self.auth_service and self.auth_service.is_unlocked():
             self.auth_service.touch()
 
+    def _on_focus_out(self, event=None):
+        # Даём Tkinter время обновить текущий фокус
+        self.after(50, self._handle_real_focus_loss)
+
     def _handle_real_focus_loss(self):
         # Если фокус всё ещё внутри этого окна, ничего не делаем
         current = self.focus_displayof()
