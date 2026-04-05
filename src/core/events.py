@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 
 @dataclass
-class EntryAdded:
+class EntryCreated:
     entry_id: int
 
 
@@ -80,10 +80,10 @@ class EventBus:
         (self._async if async_ else self._sync).setdefault(event_type, []).append(handler)
 
     def publish(self, event: Any):
-        et = type(event)
+        event_type = type(event)
 
-        for h in self._sync.get(et, []):
-            h(event)
+        for handler in self._sync.get(event_type, []):
+            handler(event)
 
-        for h in self._async.get(et, []):
-            self._pool.submit(h, event)
+        for handler in self._async.get(event_type, []):
+            self._pool.submit(handler, event)

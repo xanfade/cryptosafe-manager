@@ -1,12 +1,12 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from src.core.events import EventBus
 from src.gui.password_change_dialog import PasswordChangeDialog
 from src.gui.widgets.audit_log_viewer import AuditLogViewer
 from src.gui.login_dialog import LoginDialog
 from src.core.services.vault_service import VaultService
 from src.core.vault.password_generator import PasswordGenerator
+
 
 class EntryDialog(tk.Toplevel):
     def __init__(self, parent, title="Добавить запись", data=None):
@@ -28,6 +28,7 @@ class EntryDialog(tk.Toplevel):
             "url": "",
             "category": "",
             "notes": "",
+            "tags": "",
         }
 
         container = tk.Frame(self, bg="#1e1e1e", padx=24, pady=20)
@@ -47,10 +48,10 @@ class EntryDialog(tk.Toplevel):
         self.fields = {}
 
         self._create_label(form, "Название", 0)
-        self.fields["title"] = self._create_entry(form, 1, initial["title"])
+        self.fields["title"] = self._create_entry(form, 1, initial.get("title", ""))
 
         self._create_label(form, "Имя пользователя", 2)
-        self.fields["username"] = self._create_entry(form, 3, initial["username"])
+        self.fields["username"] = self._create_entry(form, 3, initial.get("username", ""))
 
         self._create_label(form, "Пароль", 4)
 
@@ -71,7 +72,7 @@ class EntryDialog(tk.Toplevel):
             show="*"
         )
         self.fields["password"].grid(row=0, column=0, sticky="ew", ipady=8)
-        self.fields["password"].insert(0, initial["password"])
+        self.fields["password"].insert(0, initial.get("password", ""))
 
         generate_btn = tk.Button(
             password_wrap,
@@ -110,18 +111,18 @@ class EntryDialog(tk.Toplevel):
         toggle_btn.grid(row=0, column=2, padx=(10, 0), sticky="ew")
 
         generate_btn.bind("<Enter>", lambda e: generate_btn.config(bg="#1d4ed8"))
-        generate_btn.bind("<Leave>", lambda e: generate_btn.config(bg="#2563eb"))
+        generate_btn.bind("<Leave>", lambda e: generate_btn.config(bg="#3b6fe0"))
 
         toggle_btn.bind("<Enter>", lambda e: toggle_btn.config(bg="#1d4ed8"))
-        toggle_btn.bind("<Leave>", lambda e: toggle_btn.config(bg="#2563eb"))
+        toggle_btn.bind("<Leave>", lambda e: toggle_btn.config(bg="#3b6fe0"))
 
         self.toggle_password_btn = toggle_btn
 
         self._create_label(form, "URL", 6)
-        self.fields["url"] = self._create_entry(form, 7, initial["url"])
+        self.fields["url"] = self._create_entry(form, 7, initial.get("url", ""))
 
         self._create_label(form, "Категория", 8)
-        self.fields["category"] = self._create_entry(form, 9, initial["category"])
+        self.fields["category"] = self._create_entry(form, 9, initial.get("category", ""))
 
         self._create_label(form, "Заметки", 10)
         notes = tk.Text(
@@ -139,7 +140,7 @@ class EntryDialog(tk.Toplevel):
             wrap="word"
         )
         notes.grid(row=11, column=0, sticky="ew", pady=(0, 18), ipady=6)
-        notes.insert("1.0", initial["notes"])
+        notes.insert("1.0", initial.get("notes", ""))
         self.fields["notes"] = notes
 
         form.columnconfigure(0, weight=1)
@@ -187,7 +188,7 @@ class EntryDialog(tk.Toplevel):
             use_lowercase=True,
             use_uppercase=True,
             use_digits=True,
-            use_symbols=True,
+            use_special=True,
         )
         self.fields["password"].delete(0, tk.END)
         self.fields["password"].insert(0, password)
@@ -269,19 +270,24 @@ class EntryDialog(tk.Toplevel):
             "url": url,
             "category": category,
             "notes": notes,
+            "tags": "",
         }
         self.destroy()
 
 
 class MainWindow(tk.Tk):
-    def __init__(self, db=None, key_manager=None, auth_service=None,event_bus=None):
+    def __init__(self, db=None, key_manager=None, auth_service=None, event_bus=None):
         super().__init__()
 
         self.event_bus = event_bus
         self.db = db
         self.key_manager = key_manager
         self.auth_service = auth_service
-        self.vault_service = VaultService(db=self.db, key_manager=self.key_manager,event_bus=self.event_bus)
+        self.vault_service = VaultService(
+            db=self.db,
+            key_manager=self.key_manager,
+            event_bus=self.event_bus,
+        )
 
         self.rows = []
         self.locked = False
@@ -544,13 +550,13 @@ class MainWindow(tk.Tk):
             self.table.insert(
                 "",
                 "end",
-                iid=str(row["id"]),
+                iid=str(row.id),
                 values=(
-                    row.get("title", ""),
-                    row.get("username", ""),
+                    row.title or "",
+                    row.username or "",
                     "********",
-                    row.get("url", ""),
-                    row.get("category", "")
+                    row.url or "",
+                    row.category or ""
                 )
             )
 
@@ -573,7 +579,7 @@ class MainWindow(tk.Tk):
 
     def get_row_by_id(self, entry_id: int):
         for row in self.rows:
-            if row["id"] == entry_id:
+            if row.id == entry_id:
                 return row
         return None
 
@@ -586,7 +592,6 @@ class MainWindow(tk.Tk):
         self.wait_window(dialog)
 
         if dialog.result:
-            print(dialog.result)
             self.vault_service.add_entry({
                 "title": dialog.result["title"],
                 "username": dialog.result["username"],
@@ -614,7 +619,19 @@ class MainWindow(tk.Tk):
             messagebox.showerror("Ошибка", "Запись не найдена.", parent=self)
             return
 
-        dialog = EntryDialog(self, title="Изменить запись", data=row)
+        dialog = EntryDialog(
+            self,
+            title="Изменить запись",
+            data={
+                "title": row.title,
+                "username": row.username,
+                "password": row.password,
+                "url": row.url,
+                "category": row.category,
+                "notes": row.notes,
+                "tags": row.tags,
+            }
+        )
         self.wait_window(dialog)
 
         if dialog.result:
@@ -745,9 +762,9 @@ class MainWindow(tk.Tk):
         if self.state() == "iconic" and not self._is_minimized:
             self._is_minimized = True
 
-            if self.auth_service and self.auth_service.is_unlocked():
-                self.auth_service.on_app_minimized()
-                self.apply_locked_state()
+        if self.auth_service and self.auth_service.is_unlocked():
+            self.auth_service.on_app_minimized()
+            self.apply_locked_state()
 
     def _on_map(self, event=None):
         if self._is_minimized:

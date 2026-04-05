@@ -1,11 +1,27 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from src.core.events import EntryAdded, EntryDeleted, EntryUpdated
+from src.core.events import EntryCreated, EntryDeleted, EntryUpdated
 from src.core.validators import clean_text, clean_url, validate_required
 from src.core.vault.encryption_service import VaultEncryptionService
+
+
+@dataclass(slots=True)
+class Entry:
+    id: int
+    title: str
+    username: str
+    password: str
+    url: str
+    notes: str
+    category: str
+    version: int
+    created_at: str
+    updated_at: str
+    tags: str
 
 
 class EntryManager:
@@ -58,9 +74,26 @@ class EntryManager:
         }
         return payload, tags
 
-    def create_entry(self, data_dict: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _row_to_entry(row, payload: dict[str, Any]) -> Entry:
+        return Entry(
+            id=row["id"],
+            title=payload.get("title", ""),
+            username=payload.get("username", ""),
+            password=payload.get("password", ""),
+            url=payload.get("url", ""),
+            notes=payload.get("notes", ""),
+            category=payload.get("category", ""),
+            version=payload.get("version", 1),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            tags=row["tags"] or "",
+        )
+
+    def create_entry(self, data_dict: dict[str, Any]) -> Entry:
         created_at = self._utc_now_iso()
         updated_at = created_at
+
         payload, tags = self._build_payload_from_dict(data_dict, created_at)
         encrypted_data = self.crypto.encrypt_entry_payload(payload)
 
@@ -80,14 +113,15 @@ class EntryManager:
                 raise
 
         if self.event_bus:
-            self.event_bus.publish(EntryAdded(entry_id=entry_id))
+            self.event_bus.publish(EntryCreated(entry_id=entry_id))
 
         entry = self.get_entry(entry_id)
         if entry is None:
             raise RuntimeError("Не удалось получить созданную запись")
+
         return entry
 
-    def get_entry(self, entry_id: int) -> dict[str, Any] | None:
+    def get_entry(self, entry_id: int) -> Entry | None:
         with self.db.connection() as conn:
             has_soft_delete = self._has_is_deleted_column(conn)
 
@@ -114,22 +148,9 @@ class EntryManager:
             return None
 
         payload = self.crypto.decrypt_entry_payload(row["encrypted_data"])
+        return self._row_to_entry(row, payload)
 
-        return {
-            "id": row["id"],
-            "title": payload.get("title", ""),
-            "username": payload.get("username", ""),
-            "password": payload.get("password", ""),
-            "url": payload.get("url", ""),
-            "notes": payload.get("notes", ""),
-            "category": payload.get("category", ""),
-            "version": payload.get("version", 1),
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-            "tags": row["tags"] or "",
-        }
-
-    def get_all_entries(self) -> list[dict[str, Any]]:
+    def get_all_entries(self) -> list[Entry]:
         with self.db.connection() as conn:
             has_soft_delete = self._has_is_deleted_column(conn)
 
@@ -151,34 +172,20 @@ class EntryManager:
                     """
                 ).fetchall()
 
-        entries: list[dict[str, Any]] = []
+        entries: list[Entry] = []
         for row in rows:
             payload = self.crypto.decrypt_entry_payload(row["encrypted_data"])
-            entries.append(
-                {
-                    "id": row["id"],
-                    "title": payload.get("title", ""),
-                    "username": payload.get("username", ""),
-                    "password": payload.get("password", ""),
-                    "url": payload.get("url", ""),
-                    "notes": payload.get("notes", ""),
-                    "category": payload.get("category", ""),
-                    "version": payload.get("version", 1),
-                    "created_at": row["created_at"],
-                    "updated_at": row["updated_at"],
-                    "tags": row["tags"] or "",
-                }
-            )
+            entries.append(self._row_to_entry(row, payload))
 
         return entries
 
-    def update_entry(self, entry_id: int, data_dict: dict[str, Any]) -> dict[str, Any]:
+    def update_entry(self, entry_id: int, data_dict: dict[str, Any]) -> Entry:
         existing = self.get_entry(entry_id)
         if existing is None:
             raise ValueError("Запись не найдена")
 
         updated_at = self._utc_now_iso()
-        payload, tags = self._build_payload_from_dict(data_dict, existing["created_at"])
+        payload, tags = self._build_payload_from_dict(data_dict, existing.created_at)
         encrypted_data = self.crypto.encrypt_entry_payload(payload)
 
         with self.db.connection() as conn:
@@ -193,6 +200,7 @@ class EntryManager:
                 )
                 if cursor.rowcount == 0:
                     raise ValueError("Запись не найдена")
+
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -204,6 +212,7 @@ class EntryManager:
         entry = self.get_entry(entry_id)
         if entry is None:
             raise RuntimeError("Не удалось получить обновлённую запись")
+
         return entry
 
     def delete_entry(self, entry_id: int, soft_delete: bool = True) -> None:
