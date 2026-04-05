@@ -6,8 +6,8 @@ CREATE TABLE IF NOT EXISTS vault_entries (
     encrypted_password BLOB NOT NULL,
     url TEXT,
     notes BLOB,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
     tags TEXT
 );
 
@@ -18,7 +18,7 @@ CREATE INDEX IF NOT EXISTS idx_vault_updated ON vault_entries(updated_at);
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     action TEXT NOT NULL,
-    timestamp TEXT NOT NULL,
+    timestamp TIMESTAMP NOT NULL,
     entry_id INTEGER,
     details TEXT,
     signature BLOB
@@ -41,11 +41,10 @@ CREATE TABLE IF NOT EXISTS key_store (
     key_type TEXT NOT NULL,
     key_data BLOB NOT NULL,
     version INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL
+    created_at TIMESTAMP NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_keystore_type_version
-ON key_store(key_type, version);
+CREATE INDEX IF NOT EXISTS idx_keystore_type_version ON key_store(key_type, version);
 """
 
 SCHEMA_V2 = """
@@ -54,31 +53,31 @@ CREATE TABLE IF NOT EXISTS key_store_new (
     key_type TEXT NOT NULL,
     key_data BLOB NOT NULL,
     version INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL
+    created_at TIMESTAMP NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_keystore_type_version
-ON key_store_new(key_type, version);
+CREATE INDEX IF NOT EXISTS idx_keystore_type_version ON key_store_new(key_type, version);
 """
 
 SCHEMA_V3 = """
-INSERT OR IGNORE INTO settings (setting_key, setting_value, encrypted) VALUES
-('password_policy.min_length', '12', 0),
-('password_policy.require_uppercase', 'true', 0),
-('password_policy.require_lowercase', 'true', 0),
-('password_policy.require_digits', 'true', 0),
-('password_policy.require_special', 'true', 0),
-('key_derivation.argon2', '{"time_cost":3,"memory_cost":65536,"parallelism":2,"hash_len":32,"salt_len":16}', 0),
-('key_derivation.pbkdf2', '{"iterations":100000,"dklen":32,"hash_name":"sha256","salt_len":16}', 0),
-('security.auto_lock_timeout_sec', '900', 0);
+INSERT OR IGNORE INTO settings (setting_key, setting_value, encrypted)
+VALUES
+    ('password_policy.min_length', '12', 0),
+    ('password_policy.require_uppercase', 'true', 0),
+    ('password_policy.require_lowercase', 'true', 0),
+    ('password_policy.require_digits', 'true', 0),
+    ('password_policy.require_special', 'true', 0),
+    ('key_derivation.argon2', '{"time_cost":3,"memory_cost":65536,"parallelism":2,"hash_len":32,"salt_len":16}', 0),
+    ('key_derivation.pbkdf2', '{"iterations":100000,"dklen":32,"hash_name":"sha256","salt_len":16}', 0),
+    ('security.auto_lock_timeout_sec', '900', 0);
 """
 
 SCHEMA_V4 = """
 CREATE TABLE IF NOT EXISTS vault_entries_new (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     encrypted_data BLOB NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
     tags TEXT
 );
 
