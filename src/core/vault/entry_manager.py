@@ -30,9 +30,9 @@ class EntryManager:
         return "is_deleted" in column_names
 
     def _build_payload_from_dict(
-            self,
-            data_dict: dict[str, Any],
-            created_at: str,
+        self,
+        data_dict: dict[str, Any],
+        created_at: str,
     ) -> tuple[dict[str, Any], str]:
         title = clean_text(data_dict.get("title", ""))
         username = clean_text(data_dict.get("username", ""))
@@ -40,6 +40,7 @@ class EntryManager:
         url = clean_url(data_dict.get("url", "") or "")
         notes = clean_text(data_dict.get("notes", "") or "")
         tags = self._normalize_tags(data_dict.get("tags", ""))
+        category = clean_text(data_dict.get("category", "") or "")
 
         validate_required(title, "Название")
         validate_required(username, "Имя пользователя")
@@ -53,13 +54,13 @@ class EntryManager:
             "password": password,
             "url": url,
             "notes": notes,
+            "category": category,
         }
         return payload, tags
 
     def create_entry(self, data_dict: dict[str, Any]) -> dict[str, Any]:
         created_at = self._utc_now_iso()
         updated_at = created_at
-
         payload, tags = self._build_payload_from_dict(data_dict, created_at)
         encrypted_data = self.crypto.encrypt_entry_payload(payload)
 
@@ -84,7 +85,6 @@ class EntryManager:
         entry = self.get_entry(entry_id)
         if entry is None:
             raise RuntimeError("Не удалось получить созданную запись")
-
         return entry
 
     def get_entry(self, entry_id: int) -> dict[str, Any] | None:
@@ -122,6 +122,8 @@ class EntryManager:
             "password": payload.get("password", ""),
             "url": payload.get("url", ""),
             "notes": payload.get("notes", ""),
+            "category": payload.get("category", ""),
+            "version": payload.get("version", 1),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "tags": row["tags"] or "",
@@ -150,7 +152,6 @@ class EntryManager:
                 ).fetchall()
 
         entries: list[dict[str, Any]] = []
-
         for row in rows:
             payload = self.crypto.decrypt_entry_payload(row["encrypted_data"])
             entries.append(
@@ -161,6 +162,8 @@ class EntryManager:
                     "password": payload.get("password", ""),
                     "url": payload.get("url", ""),
                     "notes": payload.get("notes", ""),
+                    "category": payload.get("category", ""),
+                    "version": payload.get("version", 1),
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                     "tags": row["tags"] or "",
@@ -201,7 +204,6 @@ class EntryManager:
         entry = self.get_entry(entry_id)
         if entry is None:
             raise RuntimeError("Не удалось получить обновлённую запись")
-
         return entry
 
     def delete_entry(self, entry_id: int, soft_delete: bool = True) -> None:

@@ -15,7 +15,7 @@ class EntryDialog(tk.Toplevel):
         self.result = None
 
         self.title(title)
-        self.geometry("640x520")
+        self.geometry("640x590")
         self.resizable(False, False)
         self.configure(bg="#1e1e1e")
         self.transient(parent)
@@ -26,6 +26,7 @@ class EntryDialog(tk.Toplevel):
             "username": "",
             "password": "",
             "url": "",
+            "category": "",
             "notes": "",
         }
 
@@ -52,8 +53,6 @@ class EntryDialog(tk.Toplevel):
         self.fields["username"] = self._create_entry(form, 3, initial["username"])
 
         self._create_label(form, "Пароль", 4)
-
-
 
         self.password_generator = PasswordGenerator()
         self.password_visible = False
@@ -121,7 +120,10 @@ class EntryDialog(tk.Toplevel):
         self._create_label(form, "URL", 6)
         self.fields["url"] = self._create_entry(form, 7, initial["url"])
 
-        self._create_label(form, "Заметки", 8)
+        self._create_label(form, "Категория", 8)
+        self.fields["category"] = self._create_entry(form, 9, initial["category"])
+
+        self._create_label(form, "Заметки", 10)
         notes = tk.Text(
             form,
             height=4,
@@ -136,7 +138,7 @@ class EntryDialog(tk.Toplevel):
             highlightcolor="#5a5a5a",
             wrap="word"
         )
-        notes.grid(row=9, column=0, sticky="ew", pady=(0, 18), ipady=6)
+        notes.grid(row=11, column=0, sticky="ew", pady=(0, 18), ipady=6)
         notes.insert("1.0", initial["notes"])
         self.fields["notes"] = notes
 
@@ -253,6 +255,7 @@ class EntryDialog(tk.Toplevel):
         username = self.fields["username"].get().strip()
         password = self.fields["password"].get().strip()
         url = self.fields["url"].get().strip()
+        category = self.fields["category"].get().strip()
         notes = self.fields["notes"].get("1.0", "end").strip()
 
         if not title_value:
@@ -264,6 +267,7 @@ class EntryDialog(tk.Toplevel):
             "username": username,
             "password": password,
             "url": url,
+            "category": category,
             "notes": notes,
         }
         self.destroy()
@@ -582,11 +586,13 @@ class MainWindow(tk.Tk):
         self.wait_window(dialog)
 
         if dialog.result:
+            print(dialog.result)
             self.vault_service.add_entry({
                 "title": dialog.result["title"],
                 "username": dialog.result["username"],
                 "password": dialog.result["password"],
                 "url": dialog.result["url"],
+                "category": dialog.result.get("category", ""),
                 "notes": dialog.result["notes"],
                 "tags": dialog.result.get("tags", ""),
             })
@@ -617,6 +623,7 @@ class MainWindow(tk.Tk):
                 "username": dialog.result["username"],
                 "password": dialog.result["password"],
                 "url": dialog.result["url"],
+                "category": dialog.result.get("category", ""),
                 "notes": dialog.result["notes"],
                 "tags": dialog.result.get("tags", ""),
             })
