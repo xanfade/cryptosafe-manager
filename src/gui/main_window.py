@@ -6,6 +6,7 @@ from src.gui.widgets.audit_log_viewer import AuditLogViewer
 from src.gui.login_dialog import LoginDialog
 from src.core.services.vault_service import VaultService
 from src.core.vault.password_generator import PasswordGenerator
+from src.gui.widgets.secure_table import SecureTable
 
 
 class EntryDialog(tk.Toplevel):
@@ -289,12 +290,14 @@ class MainWindow(tk.Tk):
             event_bus=self.event_bus,
         )
 
+
         self.rows = []
         self.locked = False
         self._is_minimized = False
         self._has_focus = True
         self._focus_out_job = None
         self._poll_job = None
+        self.update_window_title()
 
         self.title("CryptoSafe Manager")
         self.geometry("1100x620")
@@ -316,6 +319,10 @@ class MainWindow(tk.Tk):
             self.apply_locked_state()
         else:
             self.apply_unlocked_state()
+
+    def update_window_title(self):
+        state_text = "Хранилище открыто" if not self.locked else "Хранилище заблокировано"
+        self.title(f"CryptoSafe Manager — {state_text}")
 
     def setup_styles(self):
         style = ttk.Style(self)
@@ -467,6 +474,13 @@ class MainWindow(tk.Tk):
             style="Dark.TButton"
         )
         self.btn_delete.pack(side="left", padx=6, pady=8)
+        self.btn_toggle_passwords = ttk.Button(
+            toolbar,
+            text="Показать пароли",
+            command=self.toggle_passwords_visibility,
+            style="Dark.TButton"
+        )
+        self.btn_toggle_passwords.pack(side="left", padx=6, pady=8)
 
     def create_table(self):
         outer = tk.Frame(self, bg="#1e1e1e")
@@ -475,36 +489,19 @@ class MainWindow(tk.Tk):
         table_frame = tk.Frame(outer, bg="#252526")
         table_frame.pack(fill="both", expand=True)
 
-        columns = ("title", "username", "password", "url", "category")
-        self.table = ttk.Treeview(
-            table_frame,
-            columns=columns,
-            show="headings",
-            selectmode="browse"
+        self.table = SecureTable(table_frame)
+        self.table.pack(fill="both", expand=True)
+
+        self.table.bind_actions(
+            on_edit=self._edit_entry_from_table,
+            on_delete=self._delete_entries_from_table,
+            on_copy_username=self._copy_username_from_table,
+            on_copy_password=self._copy_password_from_table,
+            on_open_url=self._open_url_from_table,
+            on_selection_changed=self._on_table_selection_changed,
         )
 
-        self.table.heading("title", text="Название")
-        self.table.heading("username", text="Имя пользователя")
-        self.table.heading("password", text="Пароль")
-        self.table.heading("url", text="URL")
-        self.table.heading("category", text="Категория")
-
-        self.table.column("title", width=180, anchor="w")
-        self.table.column("username", width=170, anchor="w")
-        self.table.column("password", width=140, anchor="w")
-        self.table.column("url", width=240, anchor="w")
-        self.table.column("category", width=300, anchor="w")
-
-        y_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.table.yview)
-        x_scroll = ttk.Scrollbar(table_frame, orient="horizontal", command=self.table.xview)
-
-        self.table.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
-
-        self.table.pack(side="left", fill="both", expand=True)
-        y_scroll.pack(side="right", fill="y")
-        x_scroll.pack(side="bottom", fill="x")
-
-        self.table.bind("<Double-1>", lambda event: self.edit_record())
+        self.table.tree.bind("<Double-1>", lambda event: self.edit_record(), add="+")
 
     def create_statusbar(self):
         self.status = tk.StringVar(value="Готово")
@@ -526,8 +523,7 @@ class MainWindow(tk.Tk):
     def _clear_table(self):
         if not hasattr(self, "table"):
             return
-        for item in self.table.get_children():
-            self.table.delete(item)
+        self.table.clear()
 
     def load_entries(self):
         if getattr(self, "locked", False):
@@ -544,21 +540,7 @@ class MainWindow(tk.Tk):
         self.refresh_table()
 
     def refresh_table(self):
-        self._clear_table()
-
-        for row in self.rows:
-            self.table.insert(
-                "",
-                "end",
-                iid=str(row.id),
-                values=(
-                    row.title or "",
-                    row.username or "",
-                    "********",
-                    row.url or "",
-                    row.category or ""
-                )
-            )
+        self.table.set_rows(self.rows)
 
     def open_password_change_dialog(self):
         dialog = PasswordChangeDialog(
@@ -572,16 +554,103 @@ class MainWindow(tk.Tk):
     def get_selected_id(self):
         if self.locked:
             return None
-        selected = self.table.selection()
-        if not selected:
+        selected_id = self.table.get_first_selected_id()
+        if not selected_id:
             return None
-        return int(selected[0])
+        return int(selected_id)
+
+    def get_selected_ids(self):
+        if self.locked:
+            return []
+        return [int(entry_id) for entry_id in self.table.get_selected_ids()]
 
     def get_row_by_id(self, entry_id: int):
         for row in self.rows:
             if row.id == entry_id:
                 return row
         return None
+
+    def _select_table_entry(self, entry_id: int):
+        entry_id = str(entry_id)
+
+        for item_id, mapped_id in self.table.item_to_entry_id.items():
+            if mapped_id == entry_id:
+                self.table.tree.selection_set(item_id)
+                self.table.tree.focus(item_id)
+                self.table.tree.see(item_id)
+                return
+
+    def _edit_entry_from_table(self, entry_id: str):
+        if entry_id:
+            self.edit_record()
+
+    def _delete_entries_from_table(self, entry_ids: list[str]):
+        if not entry_ids:
+            return
+
+        if self.locked:
+            messagebox.showwarning("Хранилище заблокировано", "Сначала разблокируй хранилище", parent=self)
+            return
+
+        count = len(entry_ids)
+        text = (
+            f"Удалить выбранную запись?"
+            if count == 1
+            else f"Удалить выбранные записи: {count} шт.?"
+        )
+
+        if not messagebox.askyesno("Подтверждение", text, parent=self):
+            return
+
+        for entry_id in entry_ids:
+            self.vault_service.delete_entry(int(entry_id))
+
+        self.load_entries()
+        self.set_status("Записи удалены")
+
+    def _copy_username_from_table(self, entry_id: str):
+        row = self.get_row_by_id(int(entry_id))
+        if not row:
+            return
+
+        self.clipboard_clear()
+        self.clipboard_append(row.username or "")
+        self.set_status("Логин скопирован")
+
+    def _copy_password_from_table(self, entry_id: str):
+        row = self.get_row_by_id(int(entry_id))
+        if not row:
+            return
+
+        self.clipboard_clear()
+        self.clipboard_append(row.password or "")
+        self.set_status("Пароль скопирован")
+
+    def _open_url_from_table(self, entry_id: str):
+        import webbrowser
+
+        row = self.get_row_by_id(int(entry_id))
+        if not row or not row.url:
+            return
+
+        url = row.url.strip()
+        if "://" not in url:
+            url = "https://" + url
+
+        webbrowser.open(url)
+
+    def _on_table_selection_changed(self):
+        pass
+
+    def toggle_passwords_visibility(self):
+        self.table.toggle_password_visibility()
+
+        if getattr(self.table, "passwords_visible", False):
+            self.btn_toggle_passwords.config(text="Скрыть пароли")
+            self.set_status("Пароли показаны")
+        else:
+            self.btn_toggle_passwords.config(text="Показать пароли")
+            self.set_status("Пароли скрыты")
 
     def add_record(self):
         if self.locked:
@@ -645,8 +714,7 @@ class MainWindow(tk.Tk):
                 "tags": dialog.result.get("tags", ""),
             })
             self.load_entries()
-            self.table.selection_set(str(entry_id))
-            self.table.focus(str(entry_id))
+            self._select_table_entry(entry_id)
             self.set_status("Запись изменена")
 
     def delete_record(self):
@@ -654,20 +722,26 @@ class MainWindow(tk.Tk):
             messagebox.showwarning("Хранилище заблокировано", "Сначала разблокируй хранилище", parent=self)
             return
 
-        entry_id = self.get_selected_id()
-        if entry_id is None:
+        selected_ids = self.get_selected_ids()
+        if not selected_ids:
             messagebox.showwarning("Внимание", "Сначала выберите запись.", parent=self)
             return
 
-        confirm = messagebox.askyesno(
-            "Подтверждение",
-            "Удалить выбранную запись?",
-            parent=self
+        count = len(selected_ids)
+        text = (
+            "Удалить выбранную запись?"
+            if count == 1
+            else f"Удалить выбранные записи: {count} шт.?"
         )
-        if confirm:
+
+        if not messagebox.askyesno("Подтверждение", text, parent=self):
+            return
+
+        for entry_id in selected_ids:
             self.vault_service.delete_entry(entry_id)
-            self.load_entries()
-            self.set_status("Запись удалена")
+
+        self.load_entries()
+        self.set_status("Записи удалены")
 
     def apply_locked_state(self):
         self.locked = True
@@ -681,6 +755,7 @@ class MainWindow(tk.Tk):
         self.btn_delete.config(state="disabled")
 
         self.set_status("Хранилище заблокировано")
+        self.update_window_title()
 
     def apply_unlocked_state(self):
         self.locked = False
@@ -693,6 +768,7 @@ class MainWindow(tk.Tk):
 
         self.load_entries()
         self.set_status("Хранилище разблокировано")
+        self.update_window_title()
 
     def lock_vault(self):
         if self.auth_service:
@@ -725,6 +801,7 @@ class MainWindow(tk.Tk):
         self.bind("<FocusOut>", self._on_focus_out, add="+")
         self.bind("<Unmap>", self._on_unmap, add="+")
         self.bind("<Map>", self._on_map, add="+")
+        self.bind_all("<Control-Shift-P>", lambda event: self.toggle_passwords_visibility(), add="+")
 
     def _mark_activity(self, event=None):
         if self.auth_service and self.auth_service.is_unlocked():
