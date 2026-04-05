@@ -51,12 +51,14 @@ class VaultEncryptionService(EncryptionService):
             "password": payload.get("password", "") or "",
             "url": payload.get("url", "") or "",
             "notes": payload.get("notes", "") or "",
+            "category": payload.get("category", "") or "",
             "created_at": payload.get("created_at", "") or "",
             "version": payload.get("version", self.PAYLOAD_VERSION),
         }
 
         required = ["title", "username", "password", "version"]
         missing = [field for field in required if normalized.get(field, "") == ""]
+
         if missing:
             raise ValueError(
                 f"В payload отсутствуют обязательные поля: {', '.join(missing)}"
@@ -87,6 +89,7 @@ class VaultEncryptionService(EncryptionService):
             "password",
             "url",
             "notes",
+            "category",
             "created_at",
             "version",
         }

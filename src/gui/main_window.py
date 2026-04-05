@@ -469,7 +469,7 @@ class MainWindow(tk.Tk):
         table_frame = tk.Frame(outer, bg="#252526")
         table_frame.pack(fill="both", expand=True)
 
-        columns = ("title", "username", "password", "url", "notes")
+        columns = ("title", "username", "password", "url", "category")
         self.table = ttk.Treeview(
             table_frame,
             columns=columns,
@@ -481,13 +481,13 @@ class MainWindow(tk.Tk):
         self.table.heading("username", text="Имя пользователя")
         self.table.heading("password", text="Пароль")
         self.table.heading("url", text="URL")
-        self.table.heading("notes", text="Заметки")
+        self.table.heading("category", text="Категория")
 
         self.table.column("title", width=180, anchor="w")
         self.table.column("username", width=170, anchor="w")
         self.table.column("password", width=140, anchor="w")
         self.table.column("url", width=240, anchor="w")
-        self.table.column("notes", width=300, anchor="w")
+        self.table.column("category", width=300, anchor="w")
 
         y_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.table.yview)
         x_scroll = ttk.Scrollbar(table_frame, orient="horizontal", command=self.table.xview)
@@ -550,7 +550,7 @@ class MainWindow(tk.Tk):
                     row.get("username", ""),
                     "********",
                     row.get("url", ""),
-                    row.get("notes", "")
+                    row.get("category", "")
                 )
             )
 
