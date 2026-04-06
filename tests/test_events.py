@@ -1,4 +1,4 @@
-from src.core.events import EventBus, EntryAdded
+from src.core.events import EventBus, EntryCreated
 
 
 def test_event_bus_publish_calls_handler():
@@ -8,7 +8,7 @@ def test_event_bus_publish_calls_handler():
     def handler(e):
         called["n"] += 1
 
-    bus.subscribe(EntryAdded, handler)
-    bus.publish(EntryAdded(entry_id=1))
+    bus.subscribe(EntryCreated, handler)
+    bus.publish(EntryCreated(entry_id=1))
 
     assert called["n"] == 1

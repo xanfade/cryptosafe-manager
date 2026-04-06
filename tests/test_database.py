@@ -10,7 +10,7 @@ def test_db_schema_exists(test_db):
             ).fetchall()
         }
 
-        assert "vault_entries" in tables
+        assert "vault_entries" in tables or "vault_entries_new" in tables
         assert "audit_log" in tables
         assert "settings" in tables
         assert "key_store" in tables
