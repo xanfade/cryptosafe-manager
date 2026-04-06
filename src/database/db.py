@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import queue
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -9,25 +10,75 @@ from pathlib import Path
 from .models import SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4
 
 
-class Database:
-    def __init__(self, db_path: str):
+class SQLiteConnectionPool:
+    def __init__(self, db_path: str, max_size: int = 4):
         self.db_path = str(Path(db_path))
-        self._local = threading.local()
+        self.max_size = max(1, max_size)
+        self._pool: queue.Queue[sqlite3.Connection] = queue.Queue(maxsize=self.max_size)
+        self._created = 0
+        self._lock = threading.Lock()
 
-    def _get_conn(self) -> sqlite3.Connection:
-        conn = getattr(self._local, "conn", None)
-        if conn is None:
-            conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA foreign_keys=ON;")
-            conn.execute("PRAGMA journal_mode=WAL;")
-            self._local.conn = conn
+    def _create_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=10)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON;")
+        conn.execute("PRAGMA journal_mode=WAL;")
         return conn
+
+    def acquire(self, timeout: float | None = None) -> sqlite3.Connection:
+        try:
+            return self._pool.get_nowait()
+        except queue.Empty:
+            pass
+
+        with self._lock:
+            if self._created < self.max_size:
+                conn = self._create_connection()
+                self._created += 1
+                return conn
+
+        return self._pool.get(timeout=timeout)
+
+    def release(self, conn: sqlite3.Connection):
+        if conn is None:
+            return
+
+        try:
+            self._pool.put_nowait(conn)
+        except queue.Full:
+            try:
+                conn.close()
+            finally:
+                with self._lock:
+                    self._created = max(0, self._created - 1)
+
+    def close_all(self):
+        while True:
+            try:
+                conn = self._pool.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        with self._lock:
+            self._created = 0
+
+
+class Database:
+    def __init__(self, db_path: str, pool_size: int = 4):
+        self.db_path = str(Path(db_path))
+        self._pool = SQLiteConnectionPool(self.db_path, max_size=pool_size)
 
     @contextmanager
     def connection(self):
-        conn = self._get_conn()
-        yield conn
+        conn = self._pool.acquire(timeout=10)
+        try:
+            yield conn
+        finally:
+            self._pool.release(conn)
 
     def migrate(self):
         with self.connection() as conn:
@@ -79,10 +130,8 @@ class Database:
         if old_exists:
             columns_info = conn.execute("PRAGMA table_info(key_store)").fetchall()
             old_columns = {row["name"] for row in columns_info}
-
             rows = conn.execute("SELECT * FROM key_store").fetchall()
 
-            # Случай 1: таблица уже почти в новой схеме
             if {"key_type", "key_data", "version", "created_at"}.issubset(old_columns):
                 for row in rows:
                     conn.execute(
@@ -97,8 +146,6 @@ class Database:
                             row["created_at"] or now,
                         ),
                     )
-
-            # Случай 2: старая схема
             else:
                 for row in rows:
                     row_keys = set(row.keys())
@@ -144,14 +191,15 @@ class Database:
                         )
 
             conn.execute("DROP TABLE key_store")
+            conn.execute("ALTER TABLE key_store_new RENAME TO key_store")
 
-        conn.execute("ALTER TABLE key_store_new RENAME TO key_store")
         conn.execute("PRAGMA user_version = 2;")
         conn.commit()
 
     def _migrate_v2_to_v3(self, conn: sqlite3.Connection):
         """
-        Версия 3 не меняет key_store, но должна проходить отдельным шагом.
+        Версия 3 не меняет key_store,
+        но должна проходить отдельным шагом.
         Это важно, чтобы миграции были последовательными и расширяемыми.
         """
         conn.executescript(SCHEMA_V3)
@@ -168,19 +216,14 @@ class Database:
         columns_info = conn.execute("PRAGMA table_info(vault_entries)").fetchall()
         old_columns = {row["name"] for row in columns_info}
 
-        # Если уже новая схема — просто гарантируем наличие индексов/таблицы
         if {"encrypted_data", "created_at", "updated_at", "tags"}.issubset(old_columns):
             conn.executescript(SCHEMA_V4)
             conn.execute("PRAGMA user_version = 4;")
             conn.commit()
             return
 
-        # Старая таблица должна быть переименована вручную после переноса данных
         conn.executescript(SCHEMA_V4)
 
-        # Пытаемся перенести только уже совместимые поля.
-        # encrypted_password из старой схемы переносим как encrypted_data,
-        # но это работает только если у тебя реально там уже лежит полный payload.
         if {"encrypted_password", "created_at", "updated_at", "tags"}.issubset(old_columns):
             rows = conn.execute(
                 """
@@ -211,10 +254,12 @@ class Database:
         conn.commit()
 
     def close_thread_connection(self):
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
-            conn.close()
-            self._local.conn = None
+        # Оставлено для совместимости со старым кодом.
+        # Теперь соединения управляются пулом.
+        pass
+
+    def close(self):
+        self._pool.close_all()
 
     def get_setting(self, key: str, default=None):
         with self.connection() as conn:
