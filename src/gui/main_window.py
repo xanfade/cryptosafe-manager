@@ -1,11 +1,12 @@
 import tkinter as tk
+import difflib
+import shlex
 from tkinter import ttk, messagebox
 
 from src.gui.password_change_dialog import PasswordChangeDialog
 from src.gui.widgets.audit_log_viewer import AuditLogViewer
 from src.gui.login_dialog import LoginDialog
 from src.core.services.vault_service import VaultService
-from src.core.vault.password_generator import PasswordGenerator
 from src.gui.widgets.secure_table import SecureTable
 from src.gui.entry_dialog import EntryDialog
 
@@ -26,6 +27,10 @@ class MainWindow(tk.Tk):
 
 
         self.rows = []
+        self.all_rows = []
+        self.filtered_rows = []
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", self._on_search_changed)
         self.locked = False
         self._is_minimized = False
         self._has_focus = True
@@ -215,6 +220,44 @@ class MainWindow(tk.Tk):
             style="Dark.TButton"
         )
         self.btn_toggle_passwords.pack(side="left", padx=6, pady=8)
+        spacer = tk.Frame(toolbar, bg="#2d2d30")
+        spacer.pack(side="left", fill="x", expand=True)
+
+        search_wrap = tk.Frame(toolbar, bg="#2d2d30")
+        search_wrap.pack(side="right", padx=(6, 10), pady=8)
+
+        tk.Label(
+            search_wrap,
+            text="Поиск:",
+            bg="#2d2d30",
+            fg="#cfcfcf",
+            font=("Arial", 10)
+        ).pack(side="left", padx=(0, 8))
+
+        self.search_entry = tk.Entry(
+            search_wrap,
+            textvariable=self.search_var,
+            bg="#1e1e1e",
+            fg="white",
+            insertbackground="white",
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground="#3a3a3a",
+            highlightcolor="#5a5a5a",
+            font=("Arial", 10),
+            width=34
+        )
+        self.search_entry.pack(side="left", ipady=7)
+
+        self.btn_clear_search = ttk.Button(
+            search_wrap,
+            text="Сброс",
+            command=self.clear_search,
+            style="Dark.TButton"
+        )
+        self.btn_clear_search.pack(side="left", padx=(8, 0))
+
 
     def create_table(self):
         outer = tk.Frame(self, bg="#1e1e1e")
@@ -262,19 +305,151 @@ class MainWindow(tk.Tk):
     def load_entries(self):
         if getattr(self, "locked", False):
             self.rows = []
+            self.all_rows = []
+            self.filtered_rows = []
             self._clear_table()
             return
 
         if not self.db:
             self.rows = []
+            self.all_rows = []
+            self.filtered_rows = []
             self._clear_table()
             return
 
-        self.rows = self.vault_service.list_entries()
-        self.refresh_table()
+        self.all_rows = self.vault_service.list_entries()
+        self.apply_search()
 
     def refresh_table(self):
         self.table.set_rows(self.rows)
+
+    def clear_search(self):
+        self.search_var.set("")
+
+    def _on_search_changed(self, *args):
+        self.apply_search()
+
+    def apply_search(self):
+        if getattr(self, "locked", False):
+            self.rows = []
+            self.filtered_rows = []
+            self._clear_table()
+            return
+
+        query = self.search_var.get().strip()
+        self.filtered_rows = self.filter_rows(self.all_rows, query)
+        self.rows = self.filtered_rows
+        self.refresh_table()
+
+        total = len(self.all_rows)
+        shown = len(self.filtered_rows)
+
+        if query:
+            self.set_status(f"Найдено записей: {shown} из {total}")
+        else:
+            self.set_status(f"Записей: {shown}")
+
+    def filter_rows(self, rows, query: str):
+        if not query:
+            return list(rows)
+
+        tokens = self.parse_search_query(query)
+        result = []
+
+        for row in rows:
+            if self.row_matches_search(row, tokens):
+                result.append(row)
+
+        return result
+
+    def parse_search_query(self, query: str):
+        try:
+            parts = shlex.split(query)
+        except ValueError:
+            parts = query.split()
+
+        tokens = []
+        supported_fields = {"title", "username", "url", "notes"}
+
+        for part in parts:
+            if ":" in part:
+                field, value = part.split(":", 1)
+                field = field.lower().strip()
+                value = value.strip()
+                if field in supported_fields and value:
+                    tokens.append(("field", field, value))
+                    continue
+
+            if part.strip():
+                tokens.append(("text", part.strip()))
+
+        return tokens
+
+    def row_matches_search(self, row, tokens):
+        for token in tokens:
+            token_type = token[0]
+
+            if token_type == "field":
+                _, field, value = token
+                row_value = self.get_row_field_value(row, field)
+                if not self.match_text(row_value, value):
+                    return False
+
+            elif token_type == "text":
+                _, value = token
+                searchable = " ".join([
+                    self.get_row_field_value(row, "title"),
+                    self.get_row_field_value(row, "username"),
+                    self.get_row_field_value(row, "url"),
+                    self.get_row_field_value(row, "notes"),
+                ])
+                if not self.match_text(searchable, value):
+                    return False
+
+        return True
+
+    def get_row_field_value(self, row, field_name: str) -> str:
+        value = getattr(row, field_name, "")
+        if value is None:
+            return ""
+        return str(value)
+
+    def normalize_search_text(self, value: str) -> str:
+        return " ".join(str(value).lower().strip().split())
+
+    def match_text(self, haystack: str, needle: str) -> bool:
+        haystack_norm = self.normalize_search_text(haystack)
+        needle_norm = self.normalize_search_text(needle)
+
+        if not needle_norm:
+            return True
+
+        if needle_norm in haystack_norm:
+            return True
+
+        haystack_words = haystack_norm.split()
+        needle_words = needle_norm.split()
+
+        for n_word in needle_words:
+            if not any(self.is_fuzzy_match(n_word, h_word) for h_word in haystack_words):
+                return False
+
+        return True
+
+    def is_fuzzy_match(self, needle: str, candidate: str) -> bool:
+        if needle == candidate:
+            return True
+
+        if needle in candidate or candidate in needle:
+            return True
+
+        ratio = difflib.SequenceMatcher(None, needle, candidate).ratio()
+
+        if len(needle) <= 4:
+            return ratio >= 0.84
+        if len(needle) <= 8:
+            return ratio >= 0.76
+        return ratio >= 0.72
 
     def open_password_change_dialog(self):
         dialog = PasswordChangeDialog(
@@ -481,6 +656,9 @@ class MainWindow(tk.Tk):
         self.locked = True
         self.rows = []
         self._clear_table()
+        self.all_rows = []
+        self.filtered_rows = []
+        self.search_var.set("")
 
         self.btn_unlock.config(state="normal")
         self.btn_lock.config(state="disabled")
