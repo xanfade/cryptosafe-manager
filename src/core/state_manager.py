@@ -39,7 +39,6 @@ class StateManager:
     def lock(self) -> None:
         self.session.unlocked = False
         self.session.login_time = None
-        self.clear_clipboard()
 
     def is_unlocked(self) -> bool:
         return self.session.unlocked

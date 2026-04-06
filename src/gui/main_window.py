@@ -36,6 +36,8 @@ class MainWindow(tk.Tk):
         self._has_focus = True
         self._focus_out_job = None
         self._poll_job = None
+        self._clipboard_clear_job = None
+        self._clipboard_clear_delay_ms = 30_000
         self.update_window_title()
 
         self.title("CryptoSafe Manager")
@@ -521,9 +523,11 @@ class MainWindow(tk.Tk):
         row = self.get_row_by_id(int(entry_id))
         if not row:
             return
-
+        value = row.username or ""
         self.clipboard_clear()
         self.clipboard_append(row.username or "")
+        if self.auth_service:
+            self.auth_service.state.set_clipboard(value, 30)
         self.set_status("Логин скопирован")
 
     def _copy_password_from_table(self, entry_id: str):
@@ -531,9 +535,14 @@ class MainWindow(tk.Tk):
         if not row:
             return
 
+        value = row.password or ""
+
         self.clipboard_clear()
         self.clipboard_append(row.password or "")
+        if self.auth_service:
+            self.auth_service.state.set_clipboard(value, 30)
         self.set_status("Пароль скопирован")
+
 
     def _open_url_from_table(self, entry_id: str):
         import webbrowser
@@ -652,8 +661,42 @@ class MainWindow(tk.Tk):
         self.load_entries()
         self.set_status("Записи удалены")
 
+    def _cancel_clipboard_clear_timer(self):
+        if self._clipboard_clear_job is not None:
+            try:
+                self.after_cancel(self._clipboard_clear_job)
+            except Exception:
+                pass
+            self._clipboard_clear_job = None
+
+    def _clear_system_clipboard(self):
+        self._clipboard_clear_job = None
+
+        try:
+            self.clipboard_clear()
+            self.update_idletasks()
+        except Exception:
+            pass
+
+        if self.auth_service:
+            try:
+                self.auth_service.state.clear_clipboard()
+            except Exception:
+                pass
+
+        self.set_status("Буфер обмена очищен")
+
+    def _schedule_clipboard_clear_after_lock(self):
+        self._cancel_clipboard_clear_timer()
+        self._clipboard_clear_job = self.after(
+            self._clipboard_clear_delay_ms,
+            self._clear_system_clipboard
+        )
+
     def apply_locked_state(self):
         self.locked = True
+        self._schedule_clipboard_clear_after_lock()
+
         self.rows = []
         self._clear_table()
         self.all_rows = []
@@ -670,14 +713,13 @@ class MainWindow(tk.Tk):
         self.update_window_title()
 
     def apply_unlocked_state(self):
+        self._cancel_clipboard_clear_timer()
         self.locked = False
-
         self.btn_unlock.config(state="disabled")
         self.btn_lock.config(state="normal")
         self.btn_add.config(state="normal")
         self.btn_edit.config(state="normal")
         self.btn_delete.config(state="normal")
-
         self.load_entries()
         self.set_status("Хранилище разблокировано")
         self.update_window_title()
