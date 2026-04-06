@@ -110,15 +110,48 @@ class PasswordGeneratorDialog(tk.Toplevel):
         ).pack(anchor="w", pady=3)
 
     def generate(self):
-        gen = PasswordGenerator()
-        self.result = gen.generate(
-            length=self.length.get(),
-            use_lowercase=self.use_lower.get(),
-            use_uppercase=self.use_upper.get(),
-            use_digits=self.use_digits.get(),
-            use_special=self.use_special.get(),
-        )
-        self.destroy()
+        selected_sets = sum([
+            self.use_lower.get(),
+            self.use_upper.get(),
+            self.use_digits.get(),
+            self.use_special.get(),
+        ])
+
+        if selected_sets == 0:
+            messagebox.showerror(
+                "Ошибка генерации",
+                "Выбери хотя бы один набор символов.",
+                parent=self,
+            )
+            return
+
+        if self.length.get() < max(8, selected_sets):
+            messagebox.showerror(
+                "Ошибка генерации",
+                "Слишком маленькая длина для выбранных параметров.",
+                parent=self,
+            )
+            return
+
+        try:
+            gen = PasswordGenerator()
+            self.result = gen.generate(
+                length=self.length.get(),
+                use_lowercase=self.use_lower.get(),
+                use_uppercase=self.use_upper.get(),
+                use_digits=self.use_digits.get(),
+                use_special=self.use_special.get(),
+            )
+            self.destroy()
+        except RuntimeError:
+            messagebox.showerror(
+                "Ошибка генерации",
+                "Не удалось сгенерировать пароль с текущими настройками.\n"
+                "Увеличь длину или включи больше наборов символов.",
+                parent=self,
+            )
+        except Exception as e:
+            messagebox.showerror("Ошибка генерации", str(e), parent=self)
 
 
 class EntryDialog(tk.Toplevel):
