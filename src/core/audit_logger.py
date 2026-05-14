@@ -12,6 +12,8 @@ from src.core.events import (
     UserLoggedOut,
     LoginFailed,
     AutoLocked,
+    ClipboardCopied,
+    ClipboardCleared,
 )
 from src.database.db import Database
 
@@ -28,6 +30,9 @@ class AuditLogger:
         bus.subscribe(UserLoggedOut, self.on_logout)
         bus.subscribe(LoginFailed, self.on_login_failed)
         bus.subscribe(AutoLocked, self.on_auto_locked)
+
+        bus.subscribe(ClipboardCopied, self.on_clipboard_copied)
+        bus.subscribe(ClipboardCleared, self.on_clipboard_cleared)
 
     def _write(self, action: str, entry_id: int | None, details: dict):
         ts = datetime.utcnow().isoformat(timespec="seconds")
@@ -63,3 +68,9 @@ class AuditLogger:
 
     def on_auto_locked(self, e: AutoLocked):
         self._write("AutoLocked", None, asdict(e))
+
+    def on_clipboard_copied(self, e: ClipboardCopied):
+        self._write("ClipboardCopied", e.entry_id, asdict(e))
+
+    def on_clipboard_cleared(self, e: ClipboardCleared):
+        self._write("ClipboardCleared", None, {})
