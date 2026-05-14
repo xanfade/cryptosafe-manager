@@ -82,6 +82,11 @@ class VaultEncryptionService(EncryptionService):
             payload = json.loads(plaintext.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("Не удалось разобрать расшифрованный payload.") from exc
+        payload.setdefault("url","")
+        payload.setdefault("notes", "")
+        payload.setdefault("category", "")
+        payload.setdefault("created_at", "")
+        payload.setdefault("version", 1)
 
         required_fields = {
             "title",
