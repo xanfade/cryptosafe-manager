@@ -69,6 +69,15 @@ class AppRestored:
 class AutoLocked:
     reason: str = "inactivity"
 
+@dataclass
+class ClipboardSuspiciousActivity:
+    reason: str = "external_clipboard_change"
+
+
+@dataclass
+class ClipboardCopyBlocked:
+    reason: str = "suspicious_activity"
+
 
 class EventBus:
     def __init__(self):
