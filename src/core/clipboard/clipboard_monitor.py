@@ -14,7 +14,10 @@ class ClipboardMonitor:
             return
 
         self._running = True
-        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread = threading.Thread(
+            target=self._loop,
+            daemon=True
+        )
         self._thread.start()
 
     def stop(self) -> None:
@@ -28,7 +31,9 @@ class ClipboardMonitor:
                 continue
 
             current = self.clipboard_service.adapter.get_text()
-            expected = self.clipboard_service._expected_clipboard_text()
+            expected = self.clipboard_service.get_expected_value()
 
             if expected and current != expected:
-                self.clipboard_service.clear()
+                self.clipboard_service.report_suspicious_activity(
+                    reason="clipboard_changed_outside_application"
+                )

@@ -6,7 +6,12 @@ from enum import Enum
 import threading
 from typing import Callable, Optional
 
-from src.core.events import ClipboardCopied, ClipboardCleared
+from src.core.events import (
+    ClipboardCopied,
+    ClipboardCleared,
+    ClipboardSuspiciousActivity,
+    ClipboardCopyBlocked,
+)
 
 
 class ClipboardDataType(str, Enum):
@@ -28,6 +33,7 @@ DEFAULT_CLEAR_SECONDS = 30
 MIN_CLEAR_SECONDS = 5
 MAX_CLEAR_SECONDS = 300
 NEVER_AUTO_CLEAR = None
+
 class ClipboardService:
     def __init__(self, adapter, event_bus, clear_after_seconds: int | None = DEFAULT_CLEAR_SECONDS):
         self.adapter = adapter
@@ -38,6 +44,8 @@ class ClipboardService:
         self._observers: list[Callable[[str], None]] = []
         self._content: Optional[ClipboardContent] = None
         self._lock = threading.RLock()
+        self._blocked = False
+        self._suspicious_detected = False
 
     def subscribe(self, observer: Callable[[str], None]) -> None:
         self._observers.append(observer)
@@ -56,6 +64,13 @@ class ClipboardService:
             return
 
         with self._lock:
+            if self._blocked:
+                self.event_bus.publish(
+                    ClipboardCopyBlocked(reason="copy_blocked_after_suspicious_activity")
+                )
+                self._notify("copy_blocked")
+                return
+
             self.clear(publish_event=False)
 
             clipboard_value = self._to_clipboard_text(value, data_type)
@@ -222,3 +237,32 @@ class ClipboardService:
         )
 
         db.set_setting("clipboard.clear_timeout_sec", value, encrypted=0)
+
+    def get_expected_value(self) -> str:
+        return self._expected_clipboard_text()
+
+    def report_suspicious_activity(self, reason: str) -> None:
+        with self._lock:
+            self._suspicious_detected = True
+
+            self.event_bus.publish(
+                ClipboardSuspiciousActivity(reason=reason)
+            )
+
+            self._notify("suspicious")
+
+            # ускоренная очистка: не ждем 30 секунд
+            self.clear()
+
+    def block_future_copies(self) -> None:
+        with self._lock:
+            self._blocked = True
+            self._notify("copy_blocked")
+
+    def unblock_future_copies(self) -> None:
+        with self._lock:
+            self._blocked = False
+            self._notify("copy_unblocked")
+
+    def is_blocked(self) -> bool:
+        return self._blocked
