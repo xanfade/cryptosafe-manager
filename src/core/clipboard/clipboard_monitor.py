@@ -28,7 +28,7 @@ class ClipboardMonitor:
                 continue
 
             current = self.clipboard_service.adapter.get_text()
-            expected = self.clipboard_service._last_copied_value
+            expected = self.clipboard_service._expected_clipboard_text()
 
             if expected and current != expected:
                 self.clipboard_service.clear()
