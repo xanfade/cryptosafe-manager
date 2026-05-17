@@ -7,13 +7,36 @@ from src.core.validators import clean_url
 from src.core.vault.password_generator import PasswordGenerator
 
 
-class PasswordGeneratorDialog(tk.Toplevel):
+class CryptoSafeDialogTheme:
+    BG = "#111217"
+    CARD = "#191B23"
+    CARD_LIGHT = "#20232E"
+    INPUT_BG = "#12141B"
+    BORDER = "#2C3040"
+
+    TEXT = "#F3F4F8"
+    MUTED = "#A6ABBD"
+    MUTED_DARK = "#777D91"
+
+    PURPLE = "#8B5CF6"
+    PURPLE_HOVER = "#7C3AED"
+    PURPLE_DARK = "#5B21B6"
+
+    DANGER = "#EF4444"
+    WARNING = "#F59E0B"
+    SUCCESS = "#22C55E"
+
+    FONT = "Arial"
+
+
+class PasswordGeneratorDialog(tk.Toplevel, CryptoSafeDialogTheme):
     def __init__(self, parent):
         super().__init__(parent)
+
         self.title("Генерация пароля")
-        self.geometry("360x360")
+        self.geometry("460x520")
         self.resizable(False, False)
-        self.configure(bg="#1e1e1e")
+        self.configure(bg=self.BG)
         self.transient(parent)
         self.grab_set()
 
@@ -25,89 +48,206 @@ class PasswordGeneratorDialog(tk.Toplevel):
         self.use_digits = tk.BooleanVar(value=True)
         self.use_special = tk.BooleanVar(value=True)
 
-        frame = tk.Frame(self, bg="#1e1e1e", padx=20, pady=20)
-        frame.pack(fill="both", expand=True)
+        self._build_ui()
+        self._center(parent)
+        self.bind("<Escape>", lambda _event: self.destroy())
+
+    def _build_ui(self):
+        outer = tk.Frame(self, bg=self.BG, padx=24, pady=24)
+        outer.pack(fill="both", expand=True)
+
+        card = tk.Frame(
+            outer,
+            bg=self.CARD,
+            highlightthickness=1,
+            highlightbackground=self.BORDER,
+            highlightcolor=self.BORDER,
+        )
+        card.pack(fill="both", expand=True)
+
+        header = tk.Frame(card, bg=self.CARD, padx=24, pady=22)
+        header.pack(fill="x")
 
         tk.Label(
-            frame,
-            text="Настройки генерации",
-            fg="white",
-            bg="#1e1e1e",
-            font=("Arial", 14, "bold")
-        ).pack(anchor="w", pady=(0, 15))
+            header,
+            text="⚙",
+            fg=self.TEXT,
+            bg=self.CARD,
+            font=(self.FONT, 24),
+        ).pack(side="left", padx=(0, 14))
+
+        title_box = tk.Frame(header, bg=self.CARD)
+        title_box.pack(side="left", fill="x", expand=True)
 
         tk.Label(
-            frame,
-            text="Длина пароля",
-            fg="white",
-            bg="#1e1e1e",
-            font=("Arial", 11)
+            title_box,
+            text="Генерация пароля",
+            fg=self.TEXT,
+            bg=self.CARD,
+            font=(self.FONT, 18, "bold"),
         ).pack(anchor="w")
 
-        tk.Scale(
-            frame,
+        tk.Label(
+            title_box,
+            text="Настрой длину и набор символов",
+            fg=self.MUTED,
+            bg=self.CARD,
+            font=(self.FONT, 10),
+        ).pack(anchor="w", pady=(5, 0))
+
+        tk.Frame(card, bg=self.BORDER, height=1).pack(fill="x")
+
+        body = tk.Frame(card, bg=self.CARD, padx=24, pady=22)
+        body.pack(fill="both", expand=True)
+
+        length_row = tk.Frame(body, bg=self.CARD)
+        length_row.pack(fill="x", pady=(0, 10))
+
+        tk.Label(
+            length_row,
+            text="Длина пароля",
+            fg=self.TEXT,
+            bg=self.CARD,
+            font=(self.FONT, 11, "bold"),
+        ).pack(side="left")
+
+        self.length_value_label = tk.Label(
+            length_row,
+            textvariable=self.length,
+            fg=self.PURPLE,
+            bg=self.CARD,
+            font=(self.FONT, 12, "bold"),
+        )
+        self.length_value_label.pack(side="right")
+
+        self.length_scale = tk.Scale(
+            body,
             from_=8,
             to=64,
             orient="horizontal",
             variable=self.length,
-            bg="#1e1e1e",
-            fg="white",
+            bg=self.CARD,
+            fg=self.TEXT,
             highlightthickness=0,
-            troughcolor="#2a2a2a",
-            activebackground="#2a2a2a",
-        ).pack(fill="x", pady=(4, 16))
+            troughcolor=self.CARD_LIGHT,
+            activebackground=self.PURPLE,
+            bd=0,
+            sliderrelief="flat",
+            showvalue=False,
+            cursor="hand2",
+        )
+        self.length_scale.pack(fill="x", pady=(0, 20))
 
-        self._make_check(frame, "Строчные a-z", self.use_lower)
-        self._make_check(frame, "Заглавные A-Z", self.use_upper)
-        self._make_check(frame, "Цифры 0-9", self.use_digits)
-        self._make_check(frame, "Спецсимволы !@#$%^&*", self.use_special)
+        options = tk.Frame(
+            body,
+            bg=self.CARD_LIGHT,
+            highlightthickness=1,
+            highlightbackground=self.BORDER,
+            highlightcolor=self.BORDER,
+            padx=14,
+            pady=12,
+        )
+        options.pack(fill="x", pady=(0, 18))
 
-        buttons = tk.Frame(frame, bg="#1e1e1e")
-        buttons.pack(fill="x", pady=(24, 0))
+        tk.Label(
+            options,
+            text="Символы в пароле",
+            fg=self.TEXT,
+            bg=self.CARD_LIGHT,
+            font=(self.FONT, 11, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
 
-        tk.Button(
+        self._make_check(options, "Строчные a-z", self.use_lower)
+        self._make_check(options, "Заглавные A-Z", self.use_upper)
+        self._make_check(options, "Цифры 0-9", self.use_digits)
+        self._make_check(options, "Спецсимволы !@#$%^&*", self.use_special)
+
+        self.status_label = tk.Label(
+            body,
+            text="Выбери параметры и нажми сгенерировать",
+            fg=self.MUTED,
+            bg=self.CARD,
+            font=(self.FONT, 10),
+            anchor="w",
+        )
+        self.status_label.pack(fill="x", pady=(0, 18))
+
+        buttons = tk.Frame(body, bg=self.CARD)
+        buttons.pack(fill="x")
+
+        self.cancel_btn = self._button(
             buttons,
             text="Отмена",
             command=self.destroy,
-            bg="#2a2a2a",
-            fg="white",
-            relief="flat",
-            bd=0,
-            activebackground="#353535",
-            activeforeground="white",
-            padx=18,
-            pady=10,
-            cursor="hand2",
-        ).pack(side="left")
+            bg="#242733",
+            hover="#303443",
+            width=12,
+        )
+        self.cancel_btn.pack(side="left")
 
-        tk.Button(
+        self.generate_btn = self._button(
             buttons,
             text="Сгенерировать",
             command=self.generate,
-            bg="#2f2f2f",
-            fg="white",
-            relief="flat",
-            bd=0,
-            activebackground="#404040",
-            activeforeground="white",
-            padx=18,
-            pady=10,
-            cursor="hand2",
-        ).pack(side="right")
+            bg=self.PURPLE,
+            hover=self.PURPLE_HOVER,
+            width=18,
+            bold=True,
+        )
+        self.generate_btn.pack(side="right")
 
     def _make_check(self, parent, text, variable):
-        tk.Checkbutton(
-            parent,
+        row = tk.Frame(parent, bg=self.CARD_LIGHT)
+        row.pack(fill="x", pady=4)
+
+        check = tk.Checkbutton(
+            row,
             text=text,
             variable=variable,
-            bg="#1e1e1e",
-            fg="white",
-            selectcolor="#2a2a2a",
-            activebackground="#1e1e1e",
-            activeforeground="white",
-            font=("Arial", 10),
+            bg=self.CARD_LIGHT,
+            fg=self.TEXT,
+            selectcolor=self.INPUT_BG,
+            activebackground=self.CARD_LIGHT,
+            activeforeground=self.TEXT,
+            font=(self.FONT, 10),
             anchor="w",
-        ).pack(anchor="w", pady=3)
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+        )
+        check.pack(anchor="w")
+        return check
+
+    def _button(self, parent, text, command, bg, hover, width=12, bold=False):
+        btn = tk.Label(
+            parent,
+            text=text,
+            font=(self.FONT, 11, "bold" if bold else "normal"),
+            bg=bg,
+            fg=self.TEXT,
+            width=width,
+            pady=12,
+            cursor="hand2",
+            anchor="center",
+        )
+        btn.default_bg = bg
+        btn.hover_bg = hover
+        btn.command = command
+        btn.is_disabled = False
+
+        btn.bind("<Button-1>", lambda _event: None if btn.is_disabled else btn.command())
+        btn.bind("<Enter>", lambda _event: None if btn.is_disabled else btn.config(bg=btn.hover_bg))
+        btn.bind("<Leave>", lambda _event: None if btn.is_disabled else btn.config(bg=btn.default_bg))
+
+        return btn
+
+    def _center(self, parent):
+        self.update_idletasks()
+        parent_width = max(parent.winfo_width(), 1)
+        parent_height = max(parent.winfo_height(), 1)
+        x = parent.winfo_rootx() + (parent_width // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_rooty() + (parent_height // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
 
     def generate(self):
         selected_sets = sum([
@@ -154,19 +294,20 @@ class PasswordGeneratorDialog(tk.Toplevel):
             messagebox.showerror("Ошибка генерации", str(e), parent=self)
 
 
-class EntryDialog(tk.Toplevel):
+class EntryDialog(tk.Toplevel, CryptoSafeDialogTheme):
     def __init__(self, parent, title="Добавить запись", data=None):
         super().__init__(parent)
+
+        self.dialog_title = title
         self.title(title)
-        self.geometry("760x620")
+        self.geometry("820x700")
         self.resizable(False, False)
-        self.configure(bg="#1e1e1e")
+        self.configure(bg=self.BG)
         self.transient(parent)
         self.grab_set()
 
         self.result = None
         self.password_visible = False
-        # self.favicon_image = None
 
         initial = data or {
             "title": "",
@@ -188,62 +329,134 @@ class EntryDialog(tk.Toplevel):
         self.notes_text.insert("1.0", initial.get("notes", ""))
 
         self.password_var.trace_add("write", self.update_strength)
-        # self.url_entry.bind("<FocusOut>", self.on_url_focus_out)
-
         self.update_strength()
 
-        # if self.url_var.get().strip():
-        #     self.after(150, self.try_load_favicon)
+        self._center(parent)
+        self.title_entry.focus_set()
+        self.bind("<Escape>", lambda _event: self.destroy())
 
     def _build_ui(self):
-        container = tk.Frame(self, bg="#1e1e1e", padx=30, pady=24)
+        outer = tk.Frame(self, bg=self.BG, padx=24, pady=24)
+        outer.pack(fill="both", expand=True)
+
+        card = tk.Frame(
+            outer,
+            bg=self.CARD,
+            highlightthickness=1,
+            highlightbackground=self.BORDER,
+            highlightcolor=self.BORDER,
+        )
+        card.pack(fill="both", expand=True)
+
+        header = tk.Frame(card, bg=self.CARD, padx=26, pady=22)
+        header.pack(fill="x")
+
+        tk.Label(
+            header,
+            text="🗝",
+            fg=self.TEXT,
+            bg=self.CARD,
+            font=(self.FONT, 24),
+        ).pack(side="left", padx=(0, 14))
+
+        title_box = tk.Frame(header, bg=self.CARD)
+        title_box.pack(side="left", fill="x", expand=True)
+
+        tk.Label(
+            title_box,
+            text=self.dialog_title,
+            fg=self.TEXT,
+            bg=self.CARD,
+            font=(self.FONT, 20, "bold"),
+        ).pack(anchor="w")
+
+        tk.Label(
+            title_box,
+            text="Сохрани логин, пароль, ссылку и заметки в защищённом хранилище",
+            fg=self.MUTED,
+            bg=self.CARD,
+            font=(self.FONT, 10),
+        ).pack(anchor="w", pady=(5, 0))
+
+        tk.Frame(card, bg=self.BORDER, height=1).pack(fill="x")
+
+        container = tk.Frame(card, bg=self.CARD, padx=26, pady=24)
         container.pack(fill="both", expand=True)
 
-        container.columnconfigure(0, weight=0, minsize=130)
+        container.columnconfigure(0, weight=0, minsize=135)
         container.columnconfigure(1, weight=1)
 
-        label_font = ("Arial", 12, "bold")
-        entry_font = ("Arial", 12)
+        self._make_label(container, "Название *", 0)
+        self.title_entry = self._make_entry(container, self.title_var, 0)
 
-        def make_label(text, row):
-            lbl = tk.Label(
-                container,
-                text=text,
-                fg="white",
-                bg="#1e1e1e",
-                font=label_font,
-                anchor="w",
-            )
-            lbl.grid(row=row, column=0, sticky="w", padx=(0, 24), pady=(0, 16))
-            return lbl
+        self._make_label(container, "Логин", 1)
+        self.username_entry = self._make_entry(container, self.username_var, 1)
 
-        def make_entry(var, row):
-            ent = tk.Entry(
-                container,
-                textvariable=var,
-                font=entry_font,
-                bg="#2a2a2a",
-                fg="white",
-                insertbackground="white",
-                relief="flat",
-                bd=0,
-                highlightthickness=1,
-                highlightbackground="#3a3a3a",
-                highlightcolor="#5a5a5a",
-            )
-            ent.grid(row=row, column=1, sticky="ew", pady=(0, 16), ipady=11)
-            return ent
+        self._make_label(container, "Пароль *", 2)
+        self._build_password_row(container, 2)
 
-        make_label("Название *", 0)
-        self.title_entry = make_entry(self.title_var, 0)
+        self.strength_label = tk.Label(
+            container,
+            text="",
+            fg=self.MUTED,
+            bg=self.CARD,
+            font=(self.FONT, 10),
+            anchor="w",
+        )
+        self.strength_label.grid(row=3, column=1, sticky="w", pady=(0, 16))
 
-        make_label("Логин", 1)
-        self.username_entry = make_entry(self.username_var, 1)
+        self._make_label(container, "URL", 4)
+        self.url_entry = self._make_entry(container, self.url_var, 4)
 
-        make_label("Пароль *", 2)
+        self._make_label(container, "Категория", 5)
+        self.category_entry = self._make_entry(container, self.category_var, 5)
 
-        password_wrap = tk.Frame(container, bg="#1e1e1e")
-        password_wrap.grid(row=2, column=1, sticky="ew", pady=(0, 6))
+        self._make_label(container, "Заметки", 6)
+        self.notes_text = tk.Text(
+            container,
+            height=7,
+            font=(self.FONT, 12),
+            bg=self.INPUT_BG,
+            fg=self.TEXT,
+            insertbackground=self.TEXT,
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=self.BORDER,
+            highlightcolor=self.PURPLE,
+            wrap="word",
+        )
+        self.notes_text.grid(row=6, column=1, sticky="ew", pady=(0, 24))
+        self.notes_text.bind("<FocusIn>", lambda _event: self.notes_text.config(highlightbackground=self.PURPLE))
+        self.notes_text.bind("<FocusOut>", lambda _event: self.notes_text.config(highlightbackground=self.BORDER))
+
+        btn_wrap = tk.Frame(container, bg=self.CARD)
+        btn_wrap.grid(row=7, column=0, columnspan=2, sticky="e")
+
+        self.cancel_btn = self._button(
+            btn_wrap,
+            text="Отмена",
+            command=self.destroy,
+            bg="#242733",
+            hover="#303443",
+            width=12,
+        )
+        self.cancel_btn.pack(side="left", padx=(0, 10))
+
+        self.save_btn = self._button(
+            btn_wrap,
+            text="Сохранить",
+            command=self.on_save,
+            bg=self.PURPLE,
+            hover=self.PURPLE_HOVER,
+            width=14,
+            bold=True,
+        )
+        self.save_btn.pack(side="left")
+
+    def _build_password_row(self, parent, row):
+        password_wrap = tk.Frame(parent, bg=self.CARD)
+        password_wrap.grid(row=row, column=1, sticky="ew", pady=(0, 6))
         password_wrap.columnconfigure(0, weight=1)
         password_wrap.columnconfigure(1, weight=0)
         password_wrap.columnconfigure(2, weight=0)
@@ -251,108 +464,121 @@ class EntryDialog(tk.Toplevel):
         self.password_entry = tk.Entry(
             password_wrap,
             textvariable=self.password_var,
-            font=entry_font,
-            bg="#2a2a2a",
-            fg="white",
-            insertbackground="white",
+            font=(self.FONT, 12),
+            bg=self.INPUT_BG,
+            fg=self.TEXT,
+            insertbackground=self.TEXT,
             relief="flat",
             bd=0,
             highlightthickness=1,
-            highlightbackground="#3a3a3a",
-            highlightcolor="#5a5a5a",
+            highlightbackground=self.BORDER,
+            highlightcolor=self.PURPLE,
             show="*",
         )
         self.password_entry.grid(row=0, column=0, sticky="ew", ipady=11)
+        self.password_entry.bind("<FocusIn>", lambda _event: self.password_entry.config(highlightbackground=self.PURPLE))
+        self.password_entry.bind("<FocusOut>", lambda _event: self.password_entry.config(highlightbackground=self.BORDER))
 
-        self.show_btn = tk.Button(
+        self.show_btn = self._icon_button(
             password_wrap,
             text="👁",
             command=self.toggle_password,
-            width=3,
-            bg="#2a2a2a",
-            fg="white",
-            relief="flat",
-            bd=0,
-            font=("Arial", 11),
-            activebackground="#353535",
-            activeforeground="white",
-            cursor="hand2",
         )
         self.show_btn.grid(row=0, column=1, padx=(8, 6), sticky="ns")
 
-        self.generate_btn = tk.Button(
+        self.generate_btn = self._icon_button(
             password_wrap,
             text="⚙",
             command=self.open_generator,
-            width=3,
-            bg="#2a2a2a",
-            fg="white",
-            relief="flat",
-            bd=0,
-            font=("Arial", 11),
-            activebackground="#353535",
-            activeforeground="white",
-            cursor="hand2",
         )
         self.generate_btn.grid(row=0, column=2, sticky="ns")
 
-        self.strength_label = tk.Label(
-            container,
-            text="",
-            fg="#aaaaaa",
-            bg="#1e1e1e",
-            font=("Arial", 10),
+    def _make_label(self, parent, text, row):
+        lbl = tk.Label(
+            parent,
+            text=text,
+            fg=self.TEXT,
+            bg=self.CARD,
+            font=(self.FONT, 11, "bold"),
             anchor="w",
         )
-        self.strength_label.grid(row=3, column=1, sticky="w", pady=(0, 16))
+        lbl.grid(row=row, column=0, sticky="w", padx=(0, 24), pady=(0, 16))
+        return lbl
 
-        make_label("URL", 4)
-        self.url_entry = make_entry(self.url_var, 4)
-
-        make_label("Категория", 5)
-        self.category_entry = make_entry(self.category_var, 5)
-
-        make_label("Заметки", 6)
-
-        self.notes_text = tk.Text(
-            container,
-            height=7,
-            font=entry_font,
-            bg="#2a2a2a",
-            fg="white",
-            insertbackground="white",
+    def _make_entry(self, parent, var, row):
+        ent = tk.Entry(
+            parent,
+            textvariable=var,
+            font=(self.FONT, 12),
+            bg=self.INPUT_BG,
+            fg=self.TEXT,
+            insertbackground=self.TEXT,
             relief="flat",
             bd=0,
             highlightthickness=1,
-            highlightbackground="#3a3a3a",
-            highlightcolor="#5a5a5a",
-            wrap="word",
+            highlightbackground=self.BORDER,
+            highlightcolor=self.PURPLE,
         )
-        self.notes_text.grid(row=6, column=1, sticky="ew", pady=(0, 24))
+        ent.grid(row=row, column=1, sticky="ew", pady=(0, 16), ipady=11)
+        ent.bind("<FocusIn>", lambda _event: ent.config(highlightbackground=self.PURPLE))
+        ent.bind("<FocusOut>", lambda _event: ent.config(highlightbackground=self.BORDER))
+        return ent
 
-        btn_wrap = tk.Frame(container, bg="#1e1e1e")
-        btn_wrap.grid(row=7, column=0, columnspan=2, sticky="e")
-
-        self.save_btn = tk.Button(
-            btn_wrap,
-            text="Сохранить",
-            command=self.on_save,
-            bg="#2f2f2f",
-            fg="white",
-            relief="flat",
-            bd=0,
-            font=("Arial", 12, "bold"),
-            activebackground="#404040",
-            activeforeground="white",
+    def _button(self, parent, text, command, bg, hover, width=12, bold=False):
+        btn = tk.Label(
+            parent,
+            text=text,
+            font=(self.FONT, 11, "bold" if bold else "normal"),
+            bg=bg,
+            fg=self.TEXT,
+            width=width,
+            pady=12,
             cursor="hand2",
-            padx=26,
-            pady=10,
+            anchor="center",
         )
-        self.save_btn.pack()
+        btn.default_bg = bg
+        btn.hover_bg = hover
+        btn.command = command
+        btn.is_disabled = False
+
+        btn.bind("<Button-1>", lambda _event: None if btn.is_disabled else btn.command())
+        btn.bind("<Enter>", lambda _event: None if btn.is_disabled else btn.config(bg=btn.hover_bg))
+        btn.bind("<Leave>", lambda _event: None if btn.is_disabled else btn.config(bg=btn.default_bg))
+        return btn
+
+    def _icon_button(self, parent, text, command):
+        btn = tk.Label(
+            parent,
+            text=text,
+            font=(self.FONT, 12),
+            bg=self.CARD_LIGHT,
+            fg=self.TEXT,
+            width=4,
+            cursor="hand2",
+            anchor="center",
+        )
+        btn.default_bg = self.CARD_LIGHT
+        btn.hover_bg = "#2A2E3D"
+        btn.command = command
+        btn.is_disabled = False
+
+        btn.bind("<Button-1>", lambda _event: None if btn.is_disabled else btn.command())
+        btn.bind("<Enter>", lambda _event: None if btn.is_disabled else btn.config(bg=btn.hover_bg))
+        btn.bind("<Leave>", lambda _event: None if btn.is_disabled else btn.config(bg=btn.default_bg))
+        return btn
+
+    def _center(self, parent):
+        self.update_idletasks()
+        parent_width = max(parent.winfo_width(), 1)
+        parent_height = max(parent.winfo_height(), 1)
+        x = parent.winfo_rootx() + (parent_width // 2) - (self.winfo_width() // 2)
+        y = parent.winfo_rooty() + (parent_height // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
 
     def toggle_password(self):
         self.password_visible = not self.password_visible
         self.password_entry.config(show="" if self.password_visible else "*")
+        self.show_btn.config(text="🙈" if self.password_visible else "👁")
 
     def open_generator(self):
         dlg = PasswordGeneratorDialog(self)
@@ -378,11 +604,11 @@ class EntryDialog(tk.Toplevel):
         if not password:
             self.strength_label.config(text="")
         elif score <= 2:
-            self.strength_label.config(text="Надежность: слабый", fg="#ff5f56")
+            self.strength_label.config(text="Надёжность: слабый", fg=self.DANGER)
         elif score <= 4:
-            self.strength_label.config(text="Надежность: средний", fg="#ffbd2e")
+            self.strength_label.config(text="Надёжность: средний", fg=self.WARNING)
         else:
-            self.strength_label.config(text="Надежность: сильный", fg="#27c93f")
+            self.strength_label.config(text="Надёжность: сильный", fg=self.SUCCESS)
 
     def is_password_strong(self, password: str) -> bool:
         score = 0
@@ -412,18 +638,6 @@ class EntryDialog(tk.Toplevel):
             url = "https://" + url
         return url
 
-    # def on_url_focus_out(self, event=None):
-    #     self.try_load_favicon()
-
-    # def clear_favicon(self):
-    #     self.favicon_image = None
-
-    # def try_load_favicon(self):
-    #     pass
-
-    # def load_favicon_from_url(self, favicon_url: str) -> bool:
-    #     return False
-
     def on_save(self):
         title = self.title_var.get().strip()
         username = self.username_var.get().strip()
@@ -433,17 +647,17 @@ class EntryDialog(tk.Toplevel):
         notes = self.notes_text.get("1.0", "end").strip()
 
         if not title:
-            messagebox.showerror("Ошибка", "Введите название записи")
+            messagebox.showerror("Ошибка", "Введите название записи", parent=self)
             self.title_entry.focus_set()
             return
 
         if not password:
-            messagebox.showerror("Ошибка", "Введите пароль")
+            messagebox.showerror("Ошибка", "Введите пароль", parent=self)
             self.password_entry.focus_set()
             return
 
         if not self.is_password_strong(password):
-            messagebox.showerror("Ошибка", "Пароль слишком слабый")
+            messagebox.showerror("Ошибка", "Пароль слишком слабый", parent=self)
             self.password_entry.focus_set()
             return
 
@@ -452,7 +666,8 @@ class EntryDialog(tk.Toplevel):
             if not self.validate_url(normalized_url):
                 messagebox.showerror(
                     "Ошибка",
-                    "URL должен начинаться с http:// или https:// и содержать домен"
+                    "URL должен начинаться с http:// или https:// и содержать домен",
+                    parent=self,
                 )
                 self.url_entry.focus_set()
                 return
@@ -461,7 +676,7 @@ class EntryDialog(tk.Toplevel):
         try:
             url = clean_url(url) if url else ""
         except Exception:
-            messagebox.showerror("Ошибка", "Некорректный URL")
+            messagebox.showerror("Ошибка", "Некорректный URL", parent=self)
             self.url_entry.focus_set()
             return
 
