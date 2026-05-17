@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+import hashlib
+import re
 import threading
 from typing import Callable, Optional
-from src.core.clipboard.secure_memory import SecureMemoryBuffer
-import hashlib
-from src.core.events import ClipboardCopyBlocked
+
 from src.core.events import (
     ClipboardCopied,
     ClipboardCleared,
@@ -32,7 +32,6 @@ class ClipboardContent:
     @staticmethod
     def make_hash(value: str) -> str:
         buffer = bytearray(value, "utf-8")
-
         try:
             return hashlib.sha256(buffer).hexdigest()
         finally:
@@ -43,8 +42,7 @@ class ClipboardContent:
         return self.expected_hash == self.make_hash(value)
 
     def clear(self) -> None:
-        pass
-
+        self.expected_hash = ""
 
 
 DEFAULT_CLEAR_SECONDS = 30
@@ -52,13 +50,21 @@ MIN_CLEAR_SECONDS = 5
 MAX_CLEAR_SECONDS = 300
 NEVER_AUTO_CLEAR = None
 
+MAX_CLIPBOARD_TEXT_LENGTH = 10_000
+MAX_ENCRYPTED_BLOB_SIZE = 64 * 1024
+
+
+class ClipboardValidationError(ValueError):
+    pass
+
+
 class ClipboardService:
     def __init__(
-            self,
-            adapter,
-            event_bus,
-            clear_after_seconds: int | None = DEFAULT_CLEAR_SECONDS,
-            is_unlocked_callback: Callable[[], bool] | None = None,
+        self,
+        adapter,
+        event_bus,
+        clear_after_seconds: int | None = DEFAULT_CLEAR_SECONDS,
+        is_unlocked_callback: Callable[[], bool] | None = None,
     ):
         self.adapter = adapter
         self.event_bus = event_bus
@@ -89,32 +95,43 @@ class ClipboardService:
             return False
 
     def copy_secret(
-            self,
-            value: str | bytes,
-            entry_id: int | None = None,
-            data_type: ClipboardDataType = ClipboardDataType.TEXT,
+        self,
+        value: str | bytes,
+        entry_id: int | None = None,
+        data_type: ClipboardDataType = ClipboardDataType.TEXT,
     ) -> None:
-        if value is None or value == "":
-            return
-
         with self._lock:
             if not self._vault_is_unlocked():
-                self.event_bus.publish(
-                    ClipboardCopyBlocked(reason="vault_locked")
+                self.publish_copy_blocked(
+                    entry_id=entry_id,
+                    reason="vault_locked",
                 )
                 self._notify("copy_blocked")
                 return
 
             if self._blocked:
-                self.event_bus.publish(
-                    ClipboardCopyBlocked(reason="copy_blocked_after_suspicious_activity")
+                self.publish_copy_blocked(
+                    entry_id=entry_id,
+                    reason="copy_blocked_after_suspicious_activity",
+                )
+                self._notify("copy_blocked")
+                return
+
+            try:
+                clipboard_value = self._to_clipboard_text(value, data_type)
+                clipboard_value = self._validate_and_sanitize(
+                    clipboard_value,
+                    data_type,
+                )
+            except ClipboardValidationError as exc:
+                self.publish_copy_blocked(
+                    entry_id=entry_id,
+                    reason=str(exc),
                 )
                 self._notify("copy_blocked")
                 return
 
             self.clear(publish_event=False)
-
-            clipboard_value = self._to_clipboard_text(value, data_type)
 
             self.adapter.set_text(clipboard_value)
 
@@ -163,15 +180,56 @@ class ClipboardService:
         value: str | bytes,
         data_type: ClipboardDataType,
     ) -> str:
-        if data_type in (ClipboardDataType.TEXT, ClipboardDataType.TOTP):
-            return str(value)
+        if value is None:
+            raise ClipboardValidationError("empty_clipboard_value")
 
         if data_type == ClipboardDataType.ENCRYPTED_BLOB:
-            if isinstance(value, bytes):
-                return value.hex()
-            return str(value)
+            if not isinstance(value, bytes):
+                raise ClipboardValidationError("encrypted_blob_must_be_bytes")
+            return value.hex()
+
+        if isinstance(value, bytes):
+            try:
+                return value.decode("utf-8")
+            except UnicodeDecodeError:
+                raise ClipboardValidationError("invalid_utf8_clipboard_value")
 
         return str(value)
+
+    def _validate_and_sanitize(
+        self,
+        value: str,
+        data_type: ClipboardDataType,
+    ) -> str:
+        if value is None:
+            raise ClipboardValidationError("empty_clipboard_value")
+
+        value = value.replace("\x00", "")
+
+        if value == "":
+            raise ClipboardValidationError("empty_clipboard_value")
+
+        if len(value) > MAX_CLIPBOARD_TEXT_LENGTH:
+            raise ClipboardValidationError("clipboard_value_too_large")
+
+        if data_type == ClipboardDataType.TOTP:
+            value = value.strip()
+
+            if not re.fullmatch(r"\d{6}|\d{8}", value):
+                raise ClipboardValidationError("invalid_totp_format")
+
+            return value
+
+        if data_type == ClipboardDataType.ENCRYPTED_BLOB:
+            if len(value) > MAX_ENCRYPTED_BLOB_SIZE * 2:
+                raise ClipboardValidationError("encrypted_blob_too_large")
+
+            if not re.fullmatch(r"[0-9a-fA-F]+", value):
+                raise ClipboardValidationError("invalid_encrypted_blob_format")
+
+            return value.lower()
+
+        return value.strip()
 
     def _start_timer(self) -> None:
         if self._timer:
@@ -190,22 +248,34 @@ class ClipboardService:
                 self._timer.cancel()
                 self._timer = None
 
-            current = self.adapter.get_text()
+            try:
+                current = self.adapter.get_text()
+            except Exception:
+                current = ""
+
             if current and self._clipboard_matches_expected(current):
-                self.adapter.clear()
+                try:
+                    self.adapter.clear()
+                except Exception:
+                    pass
 
             if self._content:
                 self._content.clear()
-                self._content = None
+
+            self._content = None
 
             if publish_event:
                 self.event_bus.publish(ClipboardCleared())
 
             self._notify("cleared")
 
+    def clear_on_lock(self) -> None:
+        self.clear(publish_event=True)
+
     def _clipboard_matches_expected(self, value: str) -> bool:
         if not self._content:
             return False
+
         return self._content.matches(value)
 
     def has_active_secret(self) -> bool:
@@ -229,7 +299,7 @@ class ClipboardService:
 
             self._timer = threading.Timer(
                 self.clear_after_seconds,
-                self.clear
+                self.clear,
             )
             self._timer.daemon = True
             self._timer.start()
@@ -279,7 +349,11 @@ class ClipboardService:
             else str(self.clear_after_seconds)
         )
 
-        db.set_setting("clipboard.clear_timeout_sec", value, encrypted=1)
+        db.set_setting(
+            "clipboard.clear_timeout_sec",
+            value,
+            encrypted=1,
+        )
 
     def is_expected_value(self, value: str) -> bool:
         return self._clipboard_matches_expected(value)
@@ -297,7 +371,6 @@ class ClipboardService:
 
             self._notify("suspicious")
 
-            # ускоренная очистка: не ждем 30 секунд
             self.clear()
 
     def block_future_copies(self) -> None:
@@ -313,11 +386,24 @@ class ClipboardService:
     def is_blocked(self) -> bool:
         return self._blocked
 
-    def publish_copy_blocked(self, entry_id: int | None, reason: str):
-        if self.event_bus is not None:
+    def publish_copy_blocked(
+        self,
+        entry_id: int | None,
+        reason: str,
+    ) -> None:
+        if self.event_bus is None:
+            return
+
+        try:
             self.event_bus.publish(
                 ClipboardCopyBlocked(
                     entry_id=entry_id,
+                    reason=reason,
+                )
+            )
+        except TypeError:
+            self.event_bus.publish(
+                ClipboardCopyBlocked(
                     reason=reason,
                 )
             )
