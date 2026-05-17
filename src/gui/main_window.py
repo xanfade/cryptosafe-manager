@@ -41,7 +41,12 @@ class MainWindow(tk.Tk):
         self.clipboard_service = ClipboardService(
             adapter=TkinterClipboardAdapter(self),
             event_bus=self.event_bus,
-            clear_after_seconds=30
+            clear_after_seconds=30,
+            is_unlocked_callback=lambda: (
+                    self.auth_service is not None
+                    and self.auth_service.is_unlocked()
+                    and not self.locked
+            )
         )
         self.clipboard_service.load_timeout_from_settings(self.db)
         self.clipboard_service.subscribe(self._on_clipboard_state_changed)

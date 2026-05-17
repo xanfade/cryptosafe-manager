@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Type
 from concurrent.futures import ThreadPoolExecutor
-
+from dataclasses import dataclass, field
+from datetime import datetime
 
 @dataclass
 class EntryCreated:
@@ -37,7 +38,9 @@ class LoginFailed:
 
 @dataclass
 class ClipboardCopied:
-    entry_id: int
+    data_type: str = "text"
+    entry_id: int | None = None
+    timestamp: datetime = field(default_factory=datetime.utcnow)
 
 
 @dataclass

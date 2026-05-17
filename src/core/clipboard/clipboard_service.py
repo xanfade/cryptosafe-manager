@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from enum import Enum
 import threading
 from typing import Callable, Optional
+from src.core.clipboard.secure_memory import SecureMemoryBuffer
 
 from src.core.events import (
     ClipboardCopied,
@@ -23,9 +24,15 @@ class ClipboardDataType(str, Enum):
 @dataclass
 class ClipboardContent:
     data_type: ClipboardDataType
-    value: str | bytes
+    secure_value: SecureMemoryBuffer
     created_at: datetime
     entry_id: int | None = None
+
+    def read_value(self) -> str:
+        return self.secure_value.read_text()
+
+    def clear(self) -> None:
+        self.secure_value.close()
 
 
 
@@ -35,10 +42,17 @@ MAX_CLEAR_SECONDS = 300
 NEVER_AUTO_CLEAR = None
 
 class ClipboardService:
-    def __init__(self, adapter, event_bus, clear_after_seconds: int | None = DEFAULT_CLEAR_SECONDS):
+    def __init__(
+            self,
+            adapter,
+            event_bus,
+            clear_after_seconds: int | None = DEFAULT_CLEAR_SECONDS,
+            is_unlocked_callback: Callable[[], bool] | None = None,
+    ):
         self.adapter = adapter
         self.event_bus = event_bus
         self.clear_after_seconds = self._normalize_timeout(clear_after_seconds)
+        self.is_unlocked_callback = is_unlocked_callback
 
         self._timer: Optional[threading.Timer] = None
         self._observers: list[Callable[[str], None]] = []
@@ -54,6 +68,15 @@ class ClipboardService:
         for observer in self._observers:
             observer(state)
 
+    def _vault_is_unlocked(self) -> bool:
+        if self.is_unlocked_callback is None:
+            return True
+
+        try:
+            return bool(self.is_unlocked_callback())
+        except Exception:
+            return False
+
     def copy_secret(
             self,
             value: str | bytes,
@@ -64,6 +87,13 @@ class ClipboardService:
             return
 
         with self._lock:
+            if not self._vault_is_unlocked():
+                self.event_bus.publish(
+                    ClipboardCopyBlocked(reason="vault_locked")
+                )
+                self._notify("copy_blocked")
+                return
+
             if self._blocked:
                 self.event_bus.publish(
                     ClipboardCopyBlocked(reason="copy_blocked_after_suspicious_activity")
@@ -79,19 +109,27 @@ class ClipboardService:
 
             self._content = ClipboardContent(
                 data_type=data_type,
-                value=value,
+                secure_value=SecureMemoryBuffer(clipboard_value),
                 created_at=datetime.now(timezone.utc),
                 entry_id=entry_id,
             )
 
-            self.schedule_clear()
-
-            if entry_id is not None:
-                self.event_bus.publish(
-                    ClipboardCopied(entry_id=entry_id)
+            self.event_bus.publish(
+                ClipboardCopied(
+                    data_type=data_type.value,
+                    entry_id=entry_id,
                 )
+            )
 
             self._notify("copied")
+
+            if self.clear_after_seconds is not None:
+                self._timer = threading.Timer(
+                    self.clear_after_seconds,
+                    self.clear,
+                )
+                self._timer.daemon = True
+                self._timer.start()
 
     def copy_text(self, value: str, entry_id: int | None = None) -> None:
         self.copy_secret(
@@ -152,7 +190,9 @@ class ClipboardService:
             if expected and current == expected:
                 self.adapter.clear()
 
-            self._content = None
+            if self._content:
+                self._content.clear()
+                self._content = None
 
             if publish_event:
                 self.event_bus.publish(ClipboardCleared())
@@ -163,10 +203,7 @@ class ClipboardService:
         if not self._content:
             return ""
 
-        return self._to_clipboard_text(
-            self._content.value,
-            self._content.data_type,
-        )
+        return self._content.read_value()
 
     def has_active_secret(self) -> bool:
         return self._content is not None

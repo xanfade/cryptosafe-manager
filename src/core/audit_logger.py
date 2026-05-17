@@ -36,7 +36,7 @@ class AuditLogger:
 
     def _write(self, action: str, entry_id: int | None, details: dict):
         ts = datetime.utcnow().isoformat(timespec="seconds")
-        details_json = json.dumps(details, ensure_ascii=False)
+        details_json = json.dumps(details, ensure_ascii=False, default=str)
 
         with self.db.connection() as conn:
             conn.execute(
@@ -47,6 +47,12 @@ class AuditLogger:
                 (action, ts, entry_id, details_json, None),
             )
             conn.commit()
+
+    def json_default(value):
+        if isinstance(value, datetime):
+            return value.isoformat()
+
+        return str(value)
 
     def on_entry_created(self, e: EntryCreated):
         self._write("EntryCreated", e.entry_id, asdict(e))
