@@ -96,8 +96,24 @@ class MainWindow(tk.Tk):
             self.apply_unlocked_state()
 
     def update_window_title(self):
-        state_text = "Хранилище открыто" if not self.locked else "Хранилище заблокировано"
+        if self.locked:
+            state_text = "Хранилище заблокировано"
+        else:
+            state_text = "Хранилище открыто"
+
         self.title(f"CryptoSafe Manager — {state_text}")
+
+        if hasattr(self, "storage_state_label"):
+            if self.locked:
+                self.storage_state_label.config(
+                    text="Хранилище заблокировано",
+                    fg="#ef4444"
+                )
+            else:
+                self.storage_state_label.config(
+                    text="Хранилище разблокировано",
+                    fg="#22c55e"
+                )
 
     def setup_styles(self):
         style = ttk.Style(self)
