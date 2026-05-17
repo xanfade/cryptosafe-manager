@@ -6,6 +6,7 @@ from enum import Enum
 import threading
 from typing import Callable, Optional
 from src.core.clipboard.secure_memory import SecureMemoryBuffer
+import hashlib
 
 from src.core.events import (
     ClipboardCopied,
@@ -24,15 +25,25 @@ class ClipboardDataType(str, Enum):
 @dataclass
 class ClipboardContent:
     data_type: ClipboardDataType
-    secure_value: SecureMemoryBuffer
+    expected_hash: str
     created_at: datetime
     entry_id: int | None = None
 
-    def read_value(self) -> str:
-        return self.secure_value.read_text()
+    @staticmethod
+    def make_hash(value: str) -> str:
+        buffer = bytearray(value, "utf-8")
+
+        try:
+            return hashlib.sha256(buffer).hexdigest()
+        finally:
+            for i in range(len(buffer)):
+                buffer[i] = 0
+
+    def matches(self, value: str) -> bool:
+        return self.expected_hash == self.make_hash(value)
 
     def clear(self) -> None:
-        self.secure_value.close()
+        pass
 
 
 
@@ -109,7 +120,7 @@ class ClipboardService:
 
             self._content = ClipboardContent(
                 data_type=data_type,
-                secure_value=SecureMemoryBuffer(clipboard_value),
+                expected_hash=ClipboardContent.make_hash(clipboard_value),
                 created_at=datetime.now(timezone.utc),
                 entry_id=entry_id,
             )
@@ -184,10 +195,8 @@ class ClipboardService:
                 self._timer.cancel()
                 self._timer = None
 
-            expected = self._expected_clipboard_text()
             current = self.adapter.get_text()
-
-            if expected and current == expected:
+            if current and self._clipboard_matches_expected(current):
                 self.adapter.clear()
 
             if self._content:
@@ -199,11 +208,10 @@ class ClipboardService:
 
             self._notify("cleared")
 
-    def _expected_clipboard_text(self) -> str:
+    def _clipboard_matches_expected(self, value: str) -> bool:
         if not self._content:
-            return ""
-
-        return self._content.read_value()
+            return False
+        return self._content.matches(value)
 
     def has_active_secret(self) -> bool:
         return self._content is not None
@@ -278,8 +286,11 @@ class ClipboardService:
 
         db.set_setting("clipboard.clear_timeout_sec", value, encrypted=1)
 
+    def is_expected_value(self, value: str) -> bool:
+        return self._clipboard_matches_expected(value)
+
     def get_expected_value(self) -> str:
-        return self._expected_clipboard_text()
+        return ""
 
     def report_suspicious_activity(self, reason: str) -> None:
         with self._lock:
