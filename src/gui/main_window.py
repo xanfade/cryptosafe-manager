@@ -58,6 +58,8 @@ class MainWindow(tk.Tk):
         )
         clipboard_settings = self.clipboard_settings_repository.get()
         self.clipboard_service.apply_settings(clipboard_settings)
+        print("CLIPBOARD SETTINGS FROM DB:", clipboard_settings)
+        print("ACTIVE CLEAR TIMEOUT:", self.clipboard_service.clear_after_seconds)
         self.clipboard_service.subscribe(self._on_clipboard_state_changed)
 
         self.clipboard_monitor = ClipboardMonitor(self.clipboard_service)
@@ -1081,26 +1083,56 @@ class MainWindow(tk.Tk):
 
         self.table.set_clipboard_entry(int(entry_id))
         self.show_toast("Логин скопирован")
-        self.set_status("Логин скопирован. Буфер очистится через 30 секунд.")
+        self.set_status(f"Логин скопирован. {self.get_clipboard_timeout_text()}")
 
     def _copy_password_from_table(self, entry_id: str):
-        row = self.get_row_by_id(int(entry_id))
-        if not row:
-            return
+        try:
+            entry_id_int = int(entry_id)
 
-        value = row.password or ""
+            # Берём запись заново из VaultService,
+            # а VaultService внутри использует EntryManager
+            entry = self.vault_service.get_entry(entry_id_int)
 
-        self.clipboard_preview = ClipboardPreview(
-            data_type="Пароль",
-            source=row.title,
-            value=value,
-        )
+            if entry is None:
+                self.show_toast("Запись не найдена")
+                self.set_status("Ошибка: запись не найдена.")
+                return
 
-        self.clipboard_service.copy_secret(value=value, entry_id=int(entry_id))
+            # Проверка запрета копирования для конкретной записи
+            if getattr(entry, "never_copy_to_clipboard", False):
+                self.clipboard_service.publish_copy_blocked(
+                    entry_id=entry_id_int,
+                    reason="Entry is marked as never copy to clipboard",
+                )
+                self.show_toast("Копирование запрещено")
+                self.set_status("Копирование запрещено настройками записи.")
+                return
 
-        self.table.set_clipboard_entry(int(entry_id))
-        self.show_toast("Пароль скопирован")
-        self.set_status("Пароль скопирован. Буфер очистится через 30 секунд.")
+            value = entry.password or ""
+
+            if not value:
+                self.show_toast("Пароль пустой")
+                self.set_status("Пароль отсутствует.")
+                return
+
+            self.clipboard_preview = ClipboardPreview(
+                data_type="Пароль",
+                source=entry.title,
+                value=value,
+            )
+
+            self.clipboard_service.copy_secret(
+                value=value,
+                entry_id=entry_id_int,
+            )
+
+            self.table.set_clipboard_entry(entry_id_int)
+            self.show_toast("Пароль скопирован")
+            self.set_status("Пароль скопирован. Буфер очистится автоматически.")
+
+        except Exception as exc:
+            self.show_toast("Ошибка копирования")
+            self.set_status(f"Ошибка копирования пароля: {exc}")
 
     def _copy_all_from_table(self, entry_id: str):
         row = self.get_row_by_id(int(entry_id))
@@ -1124,7 +1156,7 @@ class MainWindow(tk.Tk):
 
         self.table.set_clipboard_entry(int(entry_id))
         self.show_toast("Данные записи скопированы")
-        self.set_status("Данные записи скопированы. Буфер очистится через 30 секунд.")
+        self.set_status(f"Данные записи скопированы. {self.get_clipboard_timeout_text()}")
 
 
     def _open_url_from_table(self, entry_id: str):
@@ -1254,7 +1286,8 @@ class MainWindow(tk.Tk):
         self.locked = True
 
         if hasattr(self, "clipboard_service"):
-            self.clipboard_service.schedule_clear()
+            if self.clipboard_service.clear_after_seconds is not None:
+                self.clipboard_service.schedule_clear()
 
         self.rows = []
         self._clear_table()
@@ -1428,6 +1461,9 @@ class MainWindow(tk.Tk):
             self.set_status("Подозрительное изменение буфера. Буфер очищен.")
 
     def show_toast(self, message: str, duration_ms: int = 2500):
+        if not self.notifications_enabled():
+            return
+
         toast = tk.Toplevel(self)
         toast.overrideredirect(True)
         toast.configure(bg="#2d2d30")
@@ -1455,8 +1491,16 @@ class MainWindow(tk.Tk):
     def start_clipboard_countdown(self):
         if self._clipboard_countdown_job:
             self.after_cancel(self._clipboard_countdown_job)
+            self._clipboard_countdown_job = None
 
-        timeout = self.clipboard_service.clear_after_seconds or 30
+        timeout = self.clipboard_service.clear_after_seconds
+
+        if timeout is None:
+            self._clipboard_remaining = 0
+            self._clipboard_warned = False
+            self.set_status("Буфер скопирован. Автоочистка отключена.")
+            return
+
         self._clipboard_remaining = timeout
         self._clipboard_warned = False
         self._tick_clipboard_countdown()
@@ -1600,6 +1644,30 @@ class MainWindow(tk.Tk):
         self.wait_window(dialog)
 
         return bool(getattr(dialog, "result", False))
+
+    def get_clipboard_timeout_text(self):
+        timeout = self.clipboard_service.clear_after_seconds
+
+        if timeout is None:
+            return "автоочистка отключена"
+
+        if timeout < 60:
+            return f"буфер очистится через {timeout} сек."
+
+        minutes = timeout // 60
+        seconds = timeout % 60
+
+        if seconds == 0:
+            return f"буфер очистится через {minutes} мин."
+
+        return f"буфер очистится через {minutes} мин. {seconds} сек."
+
+    def notifications_enabled(self) -> bool:
+        try:
+            settings = self.clipboard_settings_repository.get()
+            return bool(settings.notifications_enabled)
+        except Exception:
+            return True
 
 
 if __name__ == "__main__":

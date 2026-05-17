@@ -7,7 +7,7 @@ import threading
 from typing import Callable, Optional
 from src.core.clipboard.secure_memory import SecureMemoryBuffer
 import hashlib
-
+from src.core.events import ClipboardCopyBlocked
 from src.core.events import (
     ClipboardCopied,
     ClipboardCleared,
@@ -135,12 +135,7 @@ class ClipboardService:
             self._notify("copied")
 
             if self.clear_after_seconds is not None:
-                self._timer = threading.Timer(
-                    self.clear_after_seconds,
-                    self.clear,
-                )
-                self._timer.daemon = True
-                self._timer.start()
+                self._start_timer()
 
     def copy_text(self, value: str, entry_id: int | None = None) -> None:
         self.copy_secret(
@@ -317,3 +312,12 @@ class ClipboardService:
 
     def is_blocked(self) -> bool:
         return self._blocked
+
+    def publish_copy_blocked(self, entry_id: int | None, reason: str):
+        if self.event_bus is not None:
+            self.event_bus.publish(
+                ClipboardCopyBlocked(
+                    entry_id=entry_id,
+                    reason=reason,
+                )
+            )

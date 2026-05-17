@@ -14,6 +14,8 @@ from src.core.events import (
     AutoLocked,
     ClipboardCopied,
     ClipboardCleared,
+    ClipboardSuspiciousActivity,
+    ClipboardCopyBlocked,
 )
 from src.database.db import Database
 
@@ -33,6 +35,8 @@ class AuditLogger:
 
         bus.subscribe(ClipboardCopied, self.on_clipboard_copied)
         bus.subscribe(ClipboardCleared, self.on_clipboard_cleared)
+        bus.subscribe(ClipboardSuspiciousActivity, self.on_clipboard_suspicious_activity)
+        bus.subscribe(ClipboardCopyBlocked, self.on_clipboard_copy_blocked)
 
     def _write(self, action: str, entry_id: int | None, details: dict):
         ts = datetime.utcnow().isoformat(timespec="seconds")
@@ -80,3 +84,17 @@ class AuditLogger:
 
     def on_clipboard_cleared(self, e: ClipboardCleared):
         self._write("ClipboardCleared", None, {})
+
+    def on_clipboard_suspicious_activity(self, e: ClipboardSuspiciousActivity):
+        self._write(
+            "ClipboardSuspiciousActivity",
+            getattr(e, "entry_id", None),
+            asdict(e),
+        )
+
+    def on_clipboard_copy_blocked(self, e: ClipboardCopyBlocked):
+        self._write(
+            "ClipboardCopyBlocked",
+            getattr(e, "entry_id", None),
+            asdict(e),
+        )

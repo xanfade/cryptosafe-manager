@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Type
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -73,13 +72,17 @@ class AutoLocked:
     reason: str = "inactivity"
 
 @dataclass
-class ClipboardSuspiciousActivity:
-    reason: str = "external_clipboard_change"
+class ClipboardCopyBlocked:
+    entry_id: int | None
+    reason: str
+    timestamp: datetime = field(default_factory=datetime.utcnow)
 
 
 @dataclass
-class ClipboardCopyBlocked:
-    reason: str = "suspicious_activity"
+class ClipboardSuspiciousActivity:
+    reason: str
+    entry_id: int | None = None
+    timestamp: datetime = field(default_factory=datetime.utcnow)
 
 
 class EventBus:
