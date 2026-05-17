@@ -1,0 +1,101 @@
+name: Clipboard Cross-Platform Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  native-platforms:
+    name: Native clipboard tests on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+          - ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xclip xsel wl-clipboard
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run clipboard validation tests
+        run: |
+          python -m pytest tests/test_for_4sprint/test_clipboard_validation.py -q
+
+  linux-distributions:
+    name: Clipboard tests on ${{ matrix.image }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - python:3.12-bookworm
+          - python:3.12-bullseye
+
+    container:
+      image: ${{ matrix.image }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y git xclip xsel wl-clipboard
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run clipboard validation tests
+        run: |
+          python -m pytest tests/test_for_4sprint/test_clipboard_validation.py -q
+
+  memory-security-linux:
+    name: TEST-3 memory dump test on Linux
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xclip xsel wl-clipboard
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run TEST-3 memory security test
+        run: |
+          python -m pytest tests/test_for_4sprint/test_clipboard_memory_security.py -q
