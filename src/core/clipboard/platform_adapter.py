@@ -19,15 +19,6 @@ class ClipboardAdapter:
 
 
 class WindowsClipboardAdapter(ClipboardAdapter):
-    """
-    Windows adapter.
-
-    Использует pywin32:
-    - win32clipboard
-    - win32con
-
-    На macOS и Linux этот класс не создаётся.
-    """
 
     def __init__(self) -> None:
         self.win32clipboard: Any = importlib.import_module("win32clipboard")
@@ -66,12 +57,7 @@ class WindowsClipboardAdapter(ClipboardAdapter):
 
 
 class MacOSClipboardAdapter(ClipboardAdapter):
-    """
-    macOS adapter.
 
-    Использует pyobjc:
-    - AppKit.NSPasteboard
-    """
 
     def __init__(self) -> None:
         appkit: Any = importlib.import_module("AppKit")
@@ -108,15 +94,7 @@ class MacOSClipboardAdapter(ClipboardAdapter):
 
 
 class LinuxClipboardAdapter(ClipboardAdapter):
-    """
-    Linux adapter.
 
-    Поддерживает:
-    - Wayland через wl-copy / wl-paste
-    - X11 через xclip
-    - X11 через xsel
-    - fallback через pyperclip
-    """
 
     def __init__(self, selection: str = "clipboard") -> None:
         self.selection = selection
@@ -183,9 +161,6 @@ class LinuxClipboardAdapter(ClipboardAdapter):
 
 
 class PyperclipClipboardAdapter(ClipboardAdapter):
-    """
-    Универсальный fallback.
-    """
 
     def set_text(self, value: str) -> None:
         pyperclip: Any = importlib.import_module("pyperclip")
@@ -200,9 +175,7 @@ class PyperclipClipboardAdapter(ClipboardAdapter):
 
 
 class TkinterClipboardAdapter(ClipboardAdapter):
-    """
-    Последний fallback через Tkinter root.
-    """
+
 
     def __init__(self, root) -> None:
         self.root = root
