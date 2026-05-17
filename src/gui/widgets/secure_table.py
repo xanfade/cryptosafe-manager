@@ -16,6 +16,8 @@ class SecureTable(ttk.Frame):
         self.password_visibility: dict[str, bool] = {}
         self.passwords_visible: bool = False
         self.sort_state: dict[str, bool] = {}
+        self._on_copy_all = None
+        self.clipboard_entry_id = None
 
         self._on_edit: Callable[[str], None] | None = None
         self._on_delete: Callable[[list[str]], None] | None = None
@@ -65,6 +67,7 @@ class SecureTable(ttk.Frame):
         self.menu.add_separator()
         self.menu.add_command(label="Копировать логин", command=self._handle_copy_username)
         self.menu.add_command(label="Копировать пароль", command=self._handle_copy_password)
+        self.menu.add_command(label="Копировать всё", command=self._handle_copy_all)
         self.menu.add_separator()
         self.menu.add_command(label="Открыть URL", command=self._handle_open_url)
 
@@ -81,6 +84,7 @@ class SecureTable(ttk.Frame):
         on_copy_password: Callable[[str], None] | None = None,
         on_open_url: Callable[[str], None] | None = None,
         on_selection_changed: Callable[[], None] | None = None,
+        on_copy_all=None,
     ) -> None:
         self._on_edit = on_edit
         self._on_delete = on_delete
@@ -88,6 +92,7 @@ class SecureTable(ttk.Frame):
         self._on_copy_password = on_copy_password
         self._on_open_url = on_open_url
         self._on_selection_changed = on_selection_changed
+        self._on_copy_all = on_copy_all
 
     def clear(self) -> None:
         for item in self.tree.get_children():
@@ -172,6 +177,8 @@ class SecureTable(ttk.Frame):
     def _build_values(self, row: Any) -> tuple[str, str, str, str, str, str]:
         entry_id = str(getattr(row, "id"))
         title = getattr(row, "title", "") or ""
+        if entry_id == self.clipboard_entry_id:
+            title = "📋 " + title
         username = self._mask_username(getattr(row, "username", "") or "")
         password = self._format_password(row, entry_id)
         domain = self._extract_domain(getattr(row, "url", "") or "")
@@ -300,6 +307,7 @@ class SecureTable(ttk.Frame):
             self.menu.entryconfigure("Редактировать", state="normal" if selected_count == 1 else "disabled")
             self.menu.entryconfigure("Копировать логин", state="normal" if selected_count == 1 else "disabled")
             self.menu.entryconfigure("Копировать пароль", state="normal" if selected_count == 1 else "disabled")
+            self.menu.entryconfigure("Копировать всё", state="normal" if selected_count == 1 else "disabled")
             self.menu.entryconfigure("Открыть URL", state="normal" if selected_count == 1 else "disabled")
             self.menu.entryconfigure("Удалить", state="normal" if selected_count >= 1 else "disabled")
 
@@ -341,3 +349,17 @@ class SecureTable(ttk.Frame):
             entry_id = self.get_first_selected_id()
             if entry_id:
                 self._on_open_url(entry_id)
+
+    def _handle_copy_all(self) -> None:
+        if self._on_copy_all:
+            entry_id = self.get_first_selected_id()
+            if entry_id:
+                self._on_copy_all(entry_id)
+
+    def set_clipboard_entry(self, entry_id: int | None) -> None:
+        self.clipboard_entry_id = str(entry_id) if entry_id is not None else None
+
+        for item_id, mapped_id in self.item_to_entry_id.items():
+            row = self.rows_by_id.get(mapped_id)
+            if row is not None:
+                self.tree.item(item_id, values=self._build_values(row))

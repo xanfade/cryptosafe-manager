@@ -10,54 +10,78 @@ from src.core.services.vault_service import VaultService
 from src.gui.widgets.secure_table import SecureTable
 from src.gui.entry_dialog import EntryDialog
 from src.core.clipboard import ClipboardService, TkinterClipboardAdapter, ClipboardMonitor
+from dataclasses import dataclass
+from tkinter import messagebox, simpledialog
+from src.gui.theme import apply_theme, COLORS, FONTS
 
+@dataclass
+class ClipboardPreview:
+    data_type: str
+    source: str
+    value: str
 
 class MainWindow(tk.Tk):
     def __init__(self, db=None, key_manager=None, auth_service=None, event_bus=None):
         super().__init__()
 
+        apply_theme(self)
+        self.configure(bg=COLORS["bg"])
+
         self.event_bus = event_bus
         self.db = db
         self.key_manager = key_manager
         self.auth_service = auth_service
+
         self.vault_service = VaultService(
             db=self.db,
             key_manager=self.key_manager,
             event_bus=self.event_bus,
         )
+
         self.clipboard_service = ClipboardService(
             adapter=TkinterClipboardAdapter(self),
             event_bus=self.event_bus,
             clear_after_seconds=30
         )
         self.clipboard_service.load_timeout_from_settings(self.db)
-
         self.clipboard_service.subscribe(self._on_clipboard_state_changed)
 
         self.clipboard_monitor = ClipboardMonitor(self.clipboard_service)
         self.clipboard_monitor.start()
 
+        self._clipboard_countdown_job = None
+        self._clipboard_remaining = 0
+        self._clipboard_warned = False
+        self.clipboard_preview = None
 
         self.rows = []
         self.all_rows = []
         self.filtered_rows = []
+
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", self._on_search_changed)
+
         self.locked = False
         self._is_minimized = False
         self._has_focus = True
         self._focus_out_job = None
         self._poll_job = None
-        self.update_window_title()
 
         self.title("CryptoSafe Manager")
-        self.geometry("1100x620")
-        self.minsize(900, 540)
-        self.configure(bg="#1e1e1e")
+        self.geometry("1450x850")
+        self.minsize(1150, 680)
+        self.configure(bg=COLORS["bg"])
+
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
 
         self.setup_styles()
         self.create_menu()
+        self.create_layout()
+        self.create_sidebar()
+        self.create_header()
         self.create_toolbar()
+        self.create_table_container()
         self.create_table()
         self.create_statusbar()
 
@@ -77,6 +101,7 @@ class MainWindow(tk.Tk):
 
     def setup_styles(self):
         style = ttk.Style(self)
+
         try:
             style.theme_use("clam")
         except tk.TclError:
@@ -84,45 +109,297 @@ class MainWindow(tk.Tk):
 
         style.configure(
             "Treeview",
-            background="#252526",
-            foreground="#ffffff",
-            fieldbackground="#252526",
-            rowheight=32,
+            background="#1c1c1e",
+            foreground="#f5f5f7",
+            fieldbackground="#1c1c1e",
+            rowheight=38,
             borderwidth=0,
             relief="flat",
-            font=("Arial", 11)
+            font=("Arial", 10)
         )
+
         style.map(
             "Treeview",
-            background=[("selected", "#2f6fed")],
+            background=[("selected", "#7c3aed")],
             foreground=[("selected", "#ffffff")]
         )
 
         style.configure(
             "Treeview.Heading",
-            background="#2d2d30",
-            foreground="#ffffff",
-            font=("Arial", 11, "bold"),
+            background="#242426",
+            foreground="#a1a1aa",
+            font=("Arial", 10, "bold"),
             relief="flat",
-            borderwidth=0
+            borderwidth=0,
+            padding=(10, 9)
         )
-        style.map("Treeview.Heading", background=[("active", "#3a3a3a")])
+
+        style.map(
+            "Treeview.Heading",
+            background=[("active", "#2d2d30")]
+        )
 
         style.configure(
-            "Dark.TButton",
-            background="#3a3a3a",
-            foreground="#ffffff",
+            "Vertical.TScrollbar",
+            background="#242426",
+            troughcolor="#121212",
+            bordercolor="#121212",
+            arrowcolor="#a1a1aa",
+            relief="flat",
             borderwidth=0,
-            focusthickness=0,
-            focuscolor="none",
-            padding=(18, 10),
+        )
+
+    def create_layout(self):
+        self.sidebar = tk.Frame(
+            self,
+            bg="#171719",
+            width=245
+        )
+        self.sidebar.grid(row=0, column=0, sticky="ns")
+        self.sidebar.grid_propagate(False)
+
+        self.main_container = tk.Frame(
+            self,
+            bg=COLORS["bg"]
+        )
+        self.main_container.grid(row=0, column=1, sticky="nsew")
+
+        self.main_container.grid_rowconfigure(3, weight=1)
+        self.main_container.grid_columnconfigure(0, weight=1)
+
+    def create_sidebar(self):
+        logo_frame = tk.Frame(self.sidebar, bg="#171719")
+        logo_frame.pack(fill="x", padx=22, pady=(26, 30))
+
+        tk.Label(
+            logo_frame,
+            text="CryptoSafe",
+            bg="#171719",
+            fg="#ffffff",
+            font=("Arial", 22, "bold")
+        ).pack(anchor="w")
+
+        tk.Label(
+            logo_frame,
+            text="Password Manager",
+            bg="#171719",
+            fg="#8b8b92",
+            font=("Arial", 10)
+        ).pack(anchor="w", pady=(4, 0))
+
+        nav_frame = tk.Frame(self.sidebar, bg="#171719")
+        nav_frame.pack(fill="x", padx=12)
+
+        self.sidebar_vault_btn = self._make_sidebar_canvas_button(
+            nav_frame,
+            "🔐  Хранилище",
+            lambda: self.table.tree.focus_set() if hasattr(self, "table") else None
+        )
+        self.sidebar_vault_btn.pack(fill="x", pady=3)
+
+        self.sidebar_add_btn = self._make_sidebar_canvas_button(
+            nav_frame,
+            "➕  Добавить запись",
+            self.add_record
+        )
+        self.sidebar_add_btn.pack(fill="x", pady=3)
+
+        self.sidebar_clipboard_btn = self._make_sidebar_canvas_button(
+            nav_frame,
+            "📋  Буфер обмена",
+            self.show_clipboard_preview
+        )
+        self.sidebar_clipboard_btn.pack(fill="x", pady=3)
+
+        self.sidebar_logs_btn = self._make_sidebar_canvas_button(
+            nav_frame,
+            "📑  Журнал событий",
+            lambda: AuditLogViewer(self)
+        )
+        self.sidebar_logs_btn.pack(fill="x", pady=3)
+
+        bottom_frame = tk.Frame(self.sidebar, bg="#171719")
+        bottom_frame.pack(side="bottom", fill="x", padx=12, pady=18)
+
+        self.sidebar_lock_btn = self._make_sidebar_canvas_button(
+            bottom_frame,
+            "🔒  Заблокировать",
+            self.lock_vault
+        )
+        self.sidebar_lock_btn.pack(fill="x", pady=3)
+
+        self.sidebar_unlock_btn = self._make_sidebar_canvas_button(
+            bottom_frame,
+            "🔓  Разблокировать",
+            self.unlock_vault
+        )
+        self.sidebar_unlock_btn.pack(fill="x", pady=3)
+
+    def _make_sidebar_canvas_button(self, parent, text, command, width=205, height=46):
+        normal_bg = "#171719"
+        hover_bg = "#252529"
+        disabled_bg = "#171719"
+
+        normal_fg = "#d4d4d8"
+        disabled_fg = "#5f5f66"
+
+        canvas = tk.Canvas(
+            parent,
+            width=width,
+            height=height,
+            bg="#171719",
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2"
+        )
+
+        rect = canvas.create_rectangle(
+            0,
+            0,
+            width,
+            height,
+            fill=normal_bg,
+            outline=normal_bg
+        )
+
+        label = canvas.create_text(
+            18,
+            height // 2,
+            text=text,
+            fill=normal_fg,
+            font=("Arial", 11),
+            anchor="w"
+        )
+
+        canvas._custom_canvas_button = True
+        canvas._enabled = True
+        canvas._command = command
+        canvas._rect = rect
+        canvas._label = label
+        canvas._normal_bg = normal_bg
+        canvas._hover_bg = hover_bg
+        canvas._disabled_bg = disabled_bg
+        canvas._normal_fg = normal_fg
+        canvas._disabled_fg = disabled_fg
+
+        def set_bg(color):
+            canvas.itemconfig(rect, fill=color, outline=color)
+
+        def set_fg(color):
+            canvas.itemconfig(label, fill=color)
+
+        def on_click(event):
+            if getattr(canvas, "_enabled", True):
+                canvas._command()
+
+        def on_enter(event):
+            if getattr(canvas, "_enabled", True):
+                set_bg(canvas._hover_bg)
+                set_fg("#ffffff")
+
+        def on_leave(event):
+            if getattr(canvas, "_enabled", True):
+                set_bg(canvas._normal_bg)
+                set_fg(canvas._normal_fg)
+
+        canvas.bind("<Button-1>", on_click)
+        canvas.bind("<Enter>", on_enter)
+        canvas.bind("<Leave>", on_leave)
+
+        canvas._set_bg = set_bg
+        canvas._set_fg = set_fg
+
+        return canvas
+
+    def set_custom_button_enabled(self, button, enabled: bool):
+        if not button:
+            return
+
+        button._enabled = enabled
+
+        if getattr(button, "_custom_canvas_button", False):
+            if enabled:
+                button._set_bg(button._normal_bg)
+                button._set_fg(button._normal_fg)
+                button.config(cursor="hand2")
+            else:
+                button._set_bg(button._disabled_bg)
+                button._set_fg(button._disabled_fg)
+                button.config(cursor="arrow")
+            return
+
+        if enabled:
+            button.config(
+                bg=getattr(button, "_normal_bg", "#242426"),
+                fg=getattr(button, "_normal_fg", "#ffffff"),
+                cursor="hand2",
+                state="normal"
+            )
+        else:
+            button.config(
+                bg=getattr(button, "_disabled_bg", "#1a1a1c"),
+                fg=getattr(button, "_disabled_fg", "#66666d"),
+                cursor="arrow",
+                state="normal"
+            )
+
+    def create_header(self):
+        self.header = tk.Frame(
+            self.main_container,
+            bg=COLORS["bg"],
+            height=92
+        )
+        self.header.grid(row=0, column=0, sticky="ew")
+        self.header.grid_propagate(False)
+
+        title_block = tk.Frame(self.header, bg=COLORS["bg"])
+        title_block.pack(side="left", padx=30, pady=20)
+
+        tk.Label(
+            title_block,
+            text="Хранилище",
+            bg=COLORS["bg"],
+            fg="#ffffff",
+            font=("Arial", 24, "bold")
+        ).pack(anchor="w")
+
+        self.storage_state_label = tk.Label(
+            title_block,
+            text="Хранилище разблокировано",
+            bg=COLORS["bg"],
+            fg="#22c55e",
             font=("Arial", 10)
         )
-        style.map(
-            "Dark.TButton",
-            background=[("active", "#4a4a4a"), ("pressed", "#2f2f2f")],
-            foreground=[("active", "#ffffff"), ("pressed", "#ffffff")]
+        self.storage_state_label.pack(anchor="w", pady=(5, 0))
+
+        search_panel = tk.Frame(
+            self.header,
+            bg="#1c1c1e",
+            highlightthickness=1,
+            highlightbackground="#2d2d30"
         )
+        search_panel.pack(side="right", padx=30, pady=26)
+
+        tk.Label(
+            search_panel,
+            text="⌕",
+            bg="#1c1c1e",
+            fg="#a1a1aa",
+            font=("Arial", 13)
+        ).pack(side="left", padx=(12, 6))
+
+        self.search_entry = tk.Entry(
+            search_panel,
+            textvariable=self.search_var,
+            bg="#1c1c1e",
+            fg="#ffffff",
+            insertbackground="#ffffff",
+            relief="flat",
+            bd=0,
+            font=("Arial", 11),
+            width=32
+        )
+        self.search_entry.pack(side="left", ipady=9, padx=(0, 12))
 
     def create_menu(self):
         menubar = tk.Menu(
@@ -182,110 +459,197 @@ class MainWindow(tk.Tk):
         self.config(menu=menubar)
 
     def create_toolbar(self):
-        toolbar = tk.Frame(self, bg="#2d2d30", height=56)
-        toolbar.pack(fill="x", padx=10, pady=(10, 0))
-        toolbar.pack_propagate(False)
-
-        self.btn_unlock = ttk.Button(
-            toolbar,
-            text="Разблокировать",
-            command=self.unlock_vault,
-            style="Dark.TButton"
+        self.toolbar = tk.Frame(
+            self.main_container,
+            bg=COLORS["bg"],
+            height=62
         )
-        self.btn_unlock.pack(side="left", padx=(10, 6), pady=8)
+        self.toolbar.grid(row=1, column=0, sticky="ew")
+        self.toolbar.grid_propagate(False)
 
-        self.btn_lock = ttk.Button(
-            toolbar,
-            text="Заблокировать",
-            command=self.lock_vault,
-            style="Dark.TButton"
+        left = tk.Frame(self.toolbar, bg=COLORS["bg"])
+        left.pack(side="left", padx=30, pady=10)
+
+        self.btn_add = self._make_canvas_button(
+            left,
+            "Добавить",
+            self.add_record,
+            accent=True,
+            width=120,
+            height=38
         )
-        self.btn_lock.pack(side="left", padx=6, pady=8)
+        self.btn_add.pack(side="left", padx=(0, 10))
 
-        self.btn_add = ttk.Button(
-            toolbar,
-            text="Добавить",
-            command=self.add_record,
-            style="Dark.TButton"
+        self.btn_edit = self._make_canvas_button(
+            left,
+            "Изменить",
+            self.edit_record,
+            width=120,
+            height=38
         )
-        self.btn_add.pack(side="left", padx=6, pady=8)
+        self.btn_edit.pack(side="left", padx=(0, 10))
 
-        self.btn_edit = ttk.Button(
-            toolbar,
-            text="Изменить",
-            command=self.edit_record,
-            style="Dark.TButton"
+        self.btn_delete = self._make_canvas_button(
+            left,
+            "Удалить",
+            self.delete_record,
+            width=110,
+            height=38
         )
-        self.btn_edit.pack(side="left", padx=6, pady=8)
+        self.btn_delete.pack(side="left", padx=(0, 10))
 
-        self.btn_delete = ttk.Button(
-            toolbar,
-            text="Удалить",
-            command=self.delete_record,
-            style="Dark.TButton"
+        self.btn_toggle_passwords = self._make_canvas_button(
+            left,
+            "Показать пароли",
+            self.toggle_passwords_visibility,
+            width=155,
+            height=38
         )
-        self.btn_delete.pack(side="left", padx=6, pady=8)
-        self.btn_toggle_passwords = ttk.Button(
-            toolbar,
-            text="Показать пароли",
-            command=self.toggle_passwords_visibility,
-            style="Dark.TButton"
+        self.btn_toggle_passwords.pack(side="left", padx=(0, 10))
+
+        right = tk.Frame(self.toolbar, bg=COLORS["bg"])
+        right.pack(side="right", padx=30, pady=10)
+
+        self.btn_clear_search = self._make_canvas_button(
+            right,
+            "Сброс поиска",
+            self.clear_search,
+            width=135,
+            height=38
         )
-        self.btn_toggle_passwords.pack(side="left", padx=6, pady=8)
-        spacer = tk.Frame(toolbar, bg="#2d2d30")
-        spacer.pack(side="left", fill="x", expand=True)
+        self.btn_clear_search.pack(side="right")
 
-        search_wrap = tk.Frame(toolbar, bg="#2d2d30")
-        search_wrap.pack(side="right", padx=(6, 10), pady=8)
+        self.btn_lock = self._make_canvas_button(
+            right,
+            "Заблокировать",
+            self.lock_vault,
+            width=145,
+            height=38
+        )
+        self.btn_lock.pack(side="right", padx=(0, 10))
 
-        tk.Label(
-            search_wrap,
-            text="Поиск:",
-            bg="#2d2d30",
-            fg="#cfcfcf",
-            font=("Arial", 10)
-        ).pack(side="left", padx=(0, 8))
+        self.btn_unlock = self._make_canvas_button(
+            right,
+            "Разблокировать",
+            self.unlock_vault,
+            width=145,
+            height=38
+        )
+        self.btn_unlock.pack(side="right", padx=(0, 10))
 
-        self.search_entry = tk.Entry(
-            search_wrap,
-            textvariable=self.search_var,
-            bg="#1e1e1e",
-            fg="white",
-            insertbackground="white",
-            relief="flat",
+    def _make_sidebar_canvas_button(self, parent, text, command, width=205, height=46):
+        normal_bg = "#171719"
+        hover_bg = "#252529"
+        disabled_bg = "#171719"
+
+        normal_fg = "#d4d4d8"
+        disabled_fg = "#5f5f66"
+
+        canvas = tk.Canvas(
+            parent,
+            width=width,
+            height=height,
+            bg="#171719",
+            highlightthickness=0,
             bd=0,
+            cursor="hand2"
+        )
+
+        rect = canvas.create_rectangle(
+            0,
+            0,
+            width,
+            height,
+            fill=normal_bg,
+            outline=normal_bg
+        )
+
+        label = canvas.create_text(
+            18,
+            height // 2,
+            text=text,
+            fill=normal_fg,
+            font=("Arial", 11),
+            anchor="w"
+        )
+
+        canvas._custom_canvas_button = True
+        canvas._enabled = True
+        canvas._command = command
+        canvas._rect = rect
+        canvas._label = label
+        canvas._normal_bg = normal_bg
+        canvas._hover_bg = hover_bg
+        canvas._disabled_bg = disabled_bg
+        canvas._normal_fg = normal_fg
+        canvas._disabled_fg = disabled_fg
+
+        def set_bg(color):
+            canvas.itemconfig(rect, fill=color, outline=color)
+
+        def set_fg(color):
+            canvas.itemconfig(label, fill=color)
+
+        def on_click(event):
+            if getattr(canvas, "_enabled", True):
+                canvas._command()
+
+        def on_enter(event):
+            if getattr(canvas, "_enabled", True):
+                set_bg(canvas._hover_bg)
+                set_fg("#ffffff")
+
+        def on_leave(event):
+            if getattr(canvas, "_enabled", True):
+                set_bg(canvas._normal_bg)
+                set_fg(canvas._normal_fg)
+
+        canvas.bind("<Button-1>", on_click)
+        canvas.bind("<Enter>", on_enter)
+        canvas.bind("<Leave>", on_leave)
+
+        canvas._set_bg = set_bg
+        canvas._set_fg = set_fg
+
+        return canvas
+
+    def create_table_container(self):
+        self.table_outer = tk.Frame(
+            self.main_container,
+            bg=COLORS["bg"]
+        )
+        self.table_outer.grid(
+            row=3,
+            column=0,
+            sticky="nsew",
+            padx=30,
+            pady=(8, 18)
+        )
+
+        self.table_outer.grid_rowconfigure(0, weight=1)
+        self.table_outer.grid_columnconfigure(0, weight=1)
+
+        self.table_card = tk.Frame(
+            self.table_outer,
+            bg="#1c1c1e",
             highlightthickness=1,
-            highlightbackground="#3a3a3a",
-            highlightcolor="#5a5a5a",
-            font=("Arial", 10),
-            width=34
+            highlightbackground="#2d2d30"
         )
-        self.search_entry.pack(side="left", ipady=7)
+        self.table_card.grid(row=0, column=0, sticky="nsew")
 
-        self.btn_clear_search = ttk.Button(
-            search_wrap,
-            text="Сброс",
-            command=self.clear_search,
-            style="Dark.TButton"
-        )
-        self.btn_clear_search.pack(side="left", padx=(8, 0))
-
+        self.table_card.grid_rowconfigure(0, weight=1)
+        self.table_card.grid_columnconfigure(0, weight=1)
 
     def create_table(self):
-        outer = tk.Frame(self, bg="#1e1e1e")
-        outer.pack(fill="both", expand=True, padx=10, pady=10)
-
-        table_frame = tk.Frame(outer, bg="#252526")
-        table_frame.pack(fill="both", expand=True)
-
-        self.table = SecureTable(table_frame)
-        self.table.pack(fill="both", expand=True)
+        self.table = SecureTable(self.table_card)
+        self.table.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
 
         self.table.bind_actions(
             on_edit=self._edit_entry_from_table,
             on_delete=self._delete_entries_from_table,
             on_copy_username=self._copy_username_from_table,
             on_copy_password=self._copy_password_from_table,
+            on_copy_all=self._copy_all_from_table,
             on_open_url=self._open_url_from_table,
             on_selection_changed=self._on_table_selection_changed,
         )
@@ -293,18 +657,124 @@ class MainWindow(tk.Tk):
         self.table.tree.bind("<Double-1>", lambda event: self.edit_record(), add="+")
 
     def create_statusbar(self):
+        self.statusbar = tk.Frame(
+            self.main_container,
+            bg="#171719",
+            height=36
+        )
+        self.statusbar.grid(row=4, column=0, sticky="ew")
+        self.statusbar.grid_propagate(False)
+
         self.status = tk.StringVar(value="Готово")
-        statusbar = tk.Label(
-            self,
+
+        self.status_label = tk.Label(
+            self.statusbar,
             textvariable=self.status,
             anchor="w",
-            bg="#2d2d30",
+            bg="#171719",
             fg="#cfcfcf",
             font=("Arial", 10),
-            padx=10,
-            pady=6
+            padx=30,
+            pady=7
         )
-        statusbar.pack(fill="x", side="bottom")
+        self.status_label.pack(side="left", fill="x", expand=True)
+
+        self.clipboard_preview_button = self._make_canvas_button(
+            self.statusbar,
+            "📋 Буфер",
+            self.show_clipboard_preview,
+            width=120,
+            height=28,
+            canvas_bg="#171719"
+        )
+        self.clipboard_preview_button.pack(side="right", padx=30, pady=4)
+
+    def _make_canvas_button(
+            self,
+            parent,
+            text,
+            command,
+            accent=False,
+            width=130,
+            height=38,
+            canvas_bg=None
+    ):
+        normal_bg = "#7c3aed" if accent else "#242426"
+        hover_bg = "#8b5cf6" if accent else "#2d2d30"
+        disabled_bg = "#1b1b1d"
+
+        normal_fg = "#ffffff"
+        disabled_fg = "#6f6f76"
+
+        if canvas_bg is None:
+            canvas_bg = parent.cget("bg")
+
+        canvas = tk.Canvas(
+            parent,
+            width=width,
+            height=height,
+            bg=canvas_bg,
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2"
+        )
+
+        rect = canvas.create_rectangle(
+            0,
+            0,
+            width,
+            height,
+            fill=normal_bg,
+            outline=normal_bg
+        )
+
+        label = canvas.create_text(
+            width // 2,
+            height // 2,
+            text=text,
+            fill=normal_fg,
+            font=("Arial", 10)
+        )
+
+        canvas._custom_canvas_button = True
+        canvas._enabled = True
+        canvas._command = command
+        canvas._rect = rect
+        canvas._label = label
+        canvas._normal_bg = normal_bg
+        canvas._hover_bg = hover_bg
+        canvas._disabled_bg = disabled_bg
+        canvas._normal_fg = normal_fg
+        canvas._disabled_fg = disabled_fg
+
+        def set_bg(color):
+            canvas.itemconfig(rect, fill=color, outline=color)
+
+        def set_fg(color):
+            canvas.itemconfig(label, fill=color)
+
+        def on_click(event):
+            if getattr(canvas, "_enabled", True):
+                canvas._command()
+
+        def on_enter(event):
+            if getattr(canvas, "_enabled", True):
+                set_bg(canvas._hover_bg)
+                set_fg("#ffffff")
+
+        def on_leave(event):
+            if getattr(canvas, "_enabled", True):
+                set_bg(canvas._normal_bg)
+                set_fg(canvas._normal_fg)
+
+        canvas.bind("<Button-1>", on_click)
+        canvas.bind("<Enter>", on_enter)
+        canvas.bind("<Leave>", on_leave)
+
+        canvas._set_bg = set_bg
+        canvas._set_fg = set_fg
+
+        return canvas
 
     def set_status(self, text):
         self.status.set(text)
@@ -531,34 +1001,65 @@ class MainWindow(tk.Tk):
 
     def _copy_username_from_table(self, entry_id: str):
         row = self.get_row_by_id(int(entry_id))
-
         if not row:
             return
 
         value = row.username or ""
 
-        self.clipboard_service.copy_secret(
+        self.clipboard_preview = ClipboardPreview(
+            data_type="Логин",
+            source=row.title,
             value=value,
-            entry_id=int(entry_id)
         )
 
-        self.set_status("Логин скопирован")
+        self.clipboard_service.copy_secret(value=value, entry_id=int(entry_id))
+
+        self.table.set_clipboard_entry(int(entry_id))
+        self.show_toast("Логин скопирован")
+        self.set_status("Логин скопирован. Буфер очистится через 30 секунд.")
 
     def _copy_password_from_table(self, entry_id: str):
-        print("CLICK COPY PASSWORD", entry_id)
         row = self.get_row_by_id(int(entry_id))
-
         if not row:
             return
 
         value = row.password or ""
 
-        self.clipboard_service.copy_secret(
+        self.clipboard_preview = ClipboardPreview(
+            data_type="Пароль",
+            source=row.title,
             value=value,
-            entry_id=int(entry_id)
         )
 
-        self.set_status("Пароль скопирован")
+        self.clipboard_service.copy_secret(value=value, entry_id=int(entry_id))
+
+        self.table.set_clipboard_entry(int(entry_id))
+        self.show_toast("Пароль скопирован")
+        self.set_status("Пароль скопирован. Буфер очистится через 30 секунд.")
+
+    def _copy_all_from_table(self, entry_id: str):
+        row = self.get_row_by_id(int(entry_id))
+        if not row:
+            return
+
+        value = (
+            f"Title: {row.title}\n"
+            f"Username: {row.username or ''}\n"
+            f"Password: {row.password or ''}\n"
+            f"URL: {row.url or ''}"
+        )
+
+        self.clipboard_preview = ClipboardPreview(
+            data_type="Полная запись",
+            source=row.title,
+            value=value,
+        )
+
+        self.clipboard_service.copy_secret(value=value, entry_id=int(entry_id))
+
+        self.table.set_clipboard_entry(int(entry_id))
+        self.show_toast("Данные записи скопированы")
+        self.set_status("Данные записи скопированы. Буфер очистится через 30 секунд.")
 
 
     def _open_url_from_table(self, entry_id: str):
@@ -581,10 +1082,16 @@ class MainWindow(tk.Tk):
         self.table.toggle_password_visibility()
 
         if getattr(self.table, "passwords_visible", False):
-            self.btn_toggle_passwords.config(text="Скрыть пароли")
+            self.btn_toggle_passwords.itemconfig(
+                self.btn_toggle_passwords._label,
+                text="Скрыть пароли"
+            )
             self.set_status("Пароли показаны")
         else:
-            self.btn_toggle_passwords.config(text="Показать пароли")
+            self.btn_toggle_passwords.itemconfig(
+                self.btn_toggle_passwords._label,
+                text="Показать пароли"
+            )
             self.set_status("Пароли скрыты")
 
     def add_record(self):
@@ -690,11 +1197,21 @@ class MainWindow(tk.Tk):
         self.filtered_rows = []
         self.search_var.set("")
 
-        self.btn_unlock.config(state="normal")
-        self.btn_lock.config(state="disabled")
-        self.btn_add.config(state="disabled")
-        self.btn_edit.config(state="disabled")
-        self.btn_delete.config(state="disabled")
+        self.set_custom_button_enabled(self.btn_unlock, True)
+        self.set_custom_button_enabled(self.btn_lock, False)
+        self.set_custom_button_enabled(self.btn_add, False)
+        self.set_custom_button_enabled(self.btn_edit, False)
+        self.set_custom_button_enabled(self.btn_delete, False)
+        self.set_custom_button_enabled(self.btn_toggle_passwords, False)
+
+        if hasattr(self, "sidebar_add_btn"):
+            self.set_custom_button_enabled(self.sidebar_add_btn, False)
+
+        if hasattr(self, "sidebar_lock_btn"):
+            self.set_custom_button_enabled(self.sidebar_lock_btn, False)
+
+        if hasattr(self, "sidebar_unlock_btn"):
+            self.set_custom_button_enabled(self.sidebar_unlock_btn, True)
 
         self.set_status("Хранилище заблокировано")
         self.update_window_title()
@@ -702,11 +1219,21 @@ class MainWindow(tk.Tk):
     def apply_unlocked_state(self):
         self.locked = False
 
-        self.btn_unlock.config(state="disabled")
-        self.btn_lock.config(state="normal")
-        self.btn_add.config(state="normal")
-        self.btn_edit.config(state="normal")
-        self.btn_delete.config(state="normal")
+        self.set_custom_button_enabled(self.btn_unlock, False)
+        self.set_custom_button_enabled(self.btn_lock, True)
+        self.set_custom_button_enabled(self.btn_add, True)
+        self.set_custom_button_enabled(self.btn_edit, True)
+        self.set_custom_button_enabled(self.btn_delete, True)
+        self.set_custom_button_enabled(self.btn_toggle_passwords, True)
+
+        if hasattr(self, "sidebar_add_btn"):
+            self.set_custom_button_enabled(self.sidebar_add_btn, True)
+
+        if hasattr(self, "sidebar_lock_btn"):
+            self.set_custom_button_enabled(self.sidebar_lock_btn, True)
+
+        if hasattr(self, "sidebar_unlock_btn"):
+            self.set_custom_button_enabled(self.sidebar_unlock_btn, False)
 
         self.load_entries()
         self.set_status("Хранилище разблокировано")
@@ -820,9 +1347,194 @@ class MainWindow(tk.Tk):
 
     def _on_clipboard_state_changed(self, state: str):
         if state == "copied":
-            self.set_status("Данные скопированы. Буфер очистится через 30 секунд.")
+            self.start_clipboard_countdown()
+
         elif state == "cleared":
+            self.stop_clipboard_countdown()
+            self.table.set_clipboard_entry(None)
+            self.show_toast("Буфер обмена очищен")
             self.set_status("Буфер обмена очищен.")
+
+        elif state == "suspicious":
+            self.stop_clipboard_countdown()
+            self.table.set_clipboard_entry(None)
+            self.clipboard_preview = None
+            self.show_toast("Буфер изменён вне приложения. Данные очищены.")
+            self.set_status("Подозрительное изменение буфера. Буфер очищен.")
+
+    def show_toast(self, message: str, duration_ms: int = 2500):
+        toast = tk.Toplevel(self)
+        toast.overrideredirect(True)
+        toast.configure(bg="#2d2d30")
+        toast.attributes("-topmost", True)
+
+        label = tk.Label(
+            toast,
+            text=message,
+            bg="#2d2d30",
+            fg="#ffffff",
+            font=("Arial", 10),
+            padx=18,
+            pady=10
+        )
+        label.pack()
+
+        self.update_idletasks()
+
+        x = self.winfo_x() + self.winfo_width() - 300
+        y = self.winfo_y() + self.winfo_height() - 100
+
+        toast.geometry(f"+{x}+{y}")
+        toast.after(duration_ms, toast.destroy)
+
+    def start_clipboard_countdown(self):
+        if self._clipboard_countdown_job:
+            self.after_cancel(self._clipboard_countdown_job)
+
+        timeout = self.clipboard_service.clear_after_seconds or 30
+        self._clipboard_remaining = timeout
+        self._clipboard_warned = False
+        self._tick_clipboard_countdown()
+
+    def _tick_clipboard_countdown(self):
+        if self._clipboard_remaining <= 0:
+            self.clipboard_preview = None
+            self.table.set_clipboard_entry(None)
+            self.set_status("Буфер обмена очищен.")
+            return
+
+        self.set_status(f"Буфер очистится через {self._clipboard_remaining} сек.")
+
+        if self._clipboard_remaining == 5 and not self._clipboard_warned:
+            self._clipboard_warned = True
+            self.show_toast("Буфер обмена очистится через 5 секунд")
+
+        self._clipboard_remaining -= 1
+        self._clipboard_countdown_job = self.after(1000, self._tick_clipboard_countdown)
+
+    def stop_clipboard_countdown(self):
+        if self._clipboard_countdown_job:
+            self.after_cancel(self._clipboard_countdown_job)
+            self._clipboard_countdown_job = None
+
+        self._clipboard_remaining = 0
+        self._clipboard_warned = False
+
+    def mask_clipboard_value(self, value: str) -> str:
+        if not value:
+            return ""
+
+        if len(value) <= 3:
+            return "•" * len(value)
+
+        visible = value[:3]
+        hidden = "•" * min(len(value) - 3, 8)
+
+        return visible + hidden
+
+    def show_clipboard_preview(self):
+        if not self.clipboard_preview:
+            messagebox.showinfo("Буфер обмена", "Буфер обмена пуст или уже очищен.")
+            return
+
+        preview = self.clipboard_preview
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Clipboard Preview")
+        dialog.resizable(False, False)
+        dialog.configure(bg="#1f1f1f")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        width = 420
+        height = 270
+        x = self.winfo_x() + self.winfo_width() // 2 - width // 2
+        y = self.winfo_y() + self.winfo_height() // 2 - height // 2
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+        container = tk.Frame(dialog, bg="#1f1f1f", padx=22, pady=22)
+        container.pack(fill="both", expand=True)
+
+        tk.Label(
+            container,
+            text="Предпросмотр буфера",
+            bg="#1f1f1f",
+            fg="#ffffff",
+            font=("Arial", 14, "bold"),
+        ).pack(anchor="w", pady=(0, 14))
+
+        tk.Label(
+            container,
+            text=f"Тип данных: {preview.data_type}",
+            bg="#1f1f1f",
+            fg="#d0d0d0",
+            font=("Arial", 10),
+        ).pack(anchor="w", pady=3)
+
+        tk.Label(
+            container,
+            text=f"Источник: {preview.source}",
+            bg="#1f1f1f",
+            fg="#d0d0d0",
+            font=("Arial", 10),
+        ).pack(anchor="w", pady=3)
+
+        value_var = tk.StringVar(value=self.mask_clipboard_value(preview.value))
+
+        value_label = tk.Label(
+            container,
+            textvariable=value_var,
+            bg="#2b2b2b",
+            fg="#ffffff",
+            font=("Consolas", 11),
+            padx=12,
+            pady=10,
+            anchor="w",
+            justify="left",
+            wraplength=360,
+        )
+        value_label.pack(fill="x", pady=(14, 12))
+
+        def reveal():
+            if not self.verify_master_password_for_preview():
+                messagebox.showerror("Ошибка", "Неверный мастер-пароль.")
+                return
+
+            value_var.set(preview.value)
+
+        buttons = tk.Frame(container, bg="#1f1f1f")
+        buttons.pack(fill="x", pady=(8, 0))
+
+        show_btn = self._make_canvas_button(
+            buttons,
+            "Показать",
+            reveal,
+            accent=True,
+            width=120,
+            height=34,
+            canvas_bg="#1f1f1f"
+        )
+        show_btn.pack(side="left")
+
+        close_btn = self._make_canvas_button(
+            buttons,
+            "Закрыть",
+            dialog.destroy,
+            width=120,
+            height=34,
+            canvas_bg="#1f1f1f"
+        )
+        close_btn.pack(side="right")
+
+    def verify_master_password_for_preview(self) -> bool:
+        if not self.auth_service:
+            return False
+
+        dialog = LoginDialog(self, self.auth_service)
+        dialog.title("Подтверждение мастер-пароля")
+        self.wait_window(dialog)
+
+        return bool(getattr(dialog, "result", False))
 
 
 if __name__ == "__main__":

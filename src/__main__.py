@@ -88,7 +88,11 @@ def main():
             root.destroy()
             return
 
-    root.destroy()
+    try:
+        if root.winfo_exists():
+            root.destroy()
+    except tk.TclError:
+        pass
 
     app = MainWindow(
         db=db,
