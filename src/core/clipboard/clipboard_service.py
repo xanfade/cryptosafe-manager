@@ -254,6 +254,9 @@ class ClipboardService:
             if self.has_active_secret():
                 self.schedule_clear()
 
+    def apply_settings(self, settings) -> None:
+        self.set_clear_timeout(settings.auto_clear_timeout_sec)
+
     def load_timeout_from_settings(self, db) -> None:
         raw_value = db.get_setting("clipboard.clear_timeout_sec", "30")
 
@@ -273,7 +276,7 @@ class ClipboardService:
             else str(self.clear_after_seconds)
         )
 
-        db.set_setting("clipboard.clear_timeout_sec", value, encrypted=0)
+        db.set_setting("clipboard.clear_timeout_sec", value, encrypted=1)
 
     def get_expected_value(self) -> str:
         return self._expected_clipboard_text()

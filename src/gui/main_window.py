@@ -13,6 +13,9 @@ from src.core.clipboard import ClipboardService, TkinterClipboardAdapter, Clipbo
 from dataclasses import dataclass
 from tkinter import messagebox, simpledialog
 from src.gui.theme import apply_theme, COLORS, FONTS
+from src.core.clipboard.clipboard_settings import ClipboardSettingsRepository
+from src.gui.widgets.clipboard_settings_dialog import ClipboardSettingsDialog
+
 
 @dataclass
 class ClipboardPreview:
@@ -32,6 +35,11 @@ class MainWindow(tk.Tk):
         self.key_manager = key_manager
         self.auth_service = auth_service
 
+        self.clipboard_settings_repository = ClipboardSettingsRepository(
+            db=self.db,
+            key_manager=self.key_manager,
+        )
+
         self.vault_service = VaultService(
             db=self.db,
             key_manager=self.key_manager,
@@ -48,7 +56,8 @@ class MainWindow(tk.Tk):
                     and not self.locked
             )
         )
-        self.clipboard_service.load_timeout_from_settings(self.db)
+        clipboard_settings = self.clipboard_settings_repository.get()
+        self.clipboard_service.apply_settings(clipboard_settings)
         self.clipboard_service.subscribe(self._on_clipboard_state_changed)
 
         self.clipboard_monitor = ClipboardMonitor(self.clipboard_service)
@@ -458,7 +467,17 @@ class MainWindow(tk.Tk):
             bg="#2b2b2b", fg="#ffffff",
             activebackground="#3a3a3a", activeforeground="#ffffff"
         )
-        security_menu.add_command(label="Сменить мастер-пароль", command=self.open_password_change_dialog)
+        security_menu.add_command(
+            label="Настройки буфера обмена",
+            command=self.open_clipboard_settings,
+        )
+
+        security_menu.add_separator()
+
+        security_menu.add_command(
+            label="Сменить мастер-пароль",
+            command=self.open_password_change_dialog,
+        )
         menubar.add_cascade(label="Security", menu=security_menu)
 
         view_menu = tk.Menu(
@@ -962,6 +981,31 @@ class MainWindow(tk.Tk):
             auth_service=self.auth_service,
         )
         self.wait_window(dialog)
+
+    def open_clipboard_settings(self):
+        if self.locked:
+            messagebox.showwarning(
+                "Хранилище заблокировано",
+                "Сначала разблокируй хранилище, чтобы изменить защищённые настройки.",
+                parent=self,
+            )
+            return
+
+        dialog = ClipboardSettingsDialog(
+            self,
+            repository=self.clipboard_settings_repository,
+            clipboard_service=self.clipboard_service,
+        )
+
+        self.wait_window(dialog)
+
+        if dialog.result:
+            timeout = dialog.result.auto_clear_timeout_sec
+
+            if timeout is None:
+                self.set_status("Настройки буфера сохранены: автоочистка отключена")
+            else:
+                self.set_status(f"Настройки буфера сохранены: автоочистка {timeout} сек.")
 
     def get_selected_id(self):
         if self.locked:
