@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import importlib
 import platform
 import shutil
 import subprocess
+from typing import Any
 
 
 class ClipboardAdapter:
@@ -17,58 +19,88 @@ class ClipboardAdapter:
 
 
 class WindowsClipboardAdapter(ClipboardAdapter):
-    def set_text(self, value: str) -> None:
-        import win32clipboard
-        import win32con
+    """
+    Windows adapter.
 
-        win32clipboard.OpenClipboard()
+    Использует pywin32:
+    - win32clipboard
+    - win32con
+
+    На macOS и Linux этот класс не создаётся.
+    """
+
+    def __init__(self) -> None:
+        self.win32clipboard: Any = importlib.import_module("win32clipboard")
+        self.win32con: Any = importlib.import_module("win32con")
+
+    def set_text(self, value: str) -> None:
+        self.win32clipboard.OpenClipboard()
         try:
-            win32clipboard.EmptyClipboard()
-            win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, value)
+            self.win32clipboard.EmptyClipboard()
+            self.win32clipboard.SetClipboardData(
+                self.win32con.CF_UNICODETEXT,
+                value,
+            )
         finally:
-            win32clipboard.CloseClipboard()
+            self.win32clipboard.CloseClipboard()
 
     def get_text(self) -> str:
-        import win32clipboard
-        import win32con
-
-        win32clipboard.OpenClipboard()
+        self.win32clipboard.OpenClipboard()
         try:
-            if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
-                return win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+            if self.win32clipboard.IsClipboardFormatAvailable(
+                self.win32con.CF_UNICODETEXT
+            ):
+                return self.win32clipboard.GetClipboardData(
+                    self.win32con.CF_UNICODETEXT
+                )
             return ""
         finally:
-            win32clipboard.CloseClipboard()
+            self.win32clipboard.CloseClipboard()
 
     def clear(self) -> None:
-        import win32clipboard
-
-        win32clipboard.OpenClipboard()
+        self.win32clipboard.OpenClipboard()
         try:
-            win32clipboard.EmptyClipboard()
+            self.win32clipboard.EmptyClipboard()
         finally:
-            win32clipboard.CloseClipboard()
+            self.win32clipboard.CloseClipboard()
 
 
 class MacOSClipboardAdapter(ClipboardAdapter):
-    def __init__(self):
-        from AppKit import NSPasteboard, NSPasteboardNameGeneral, NSPasteboardTypeString
+    """
+    macOS adapter.
 
-        self.NSPasteboard = NSPasteboard
-        self.NSPasteboardNameGeneral = NSPasteboardNameGeneral
-        self.NSPasteboardTypeString = NSPasteboardTypeString
+    Использует pyobjc:
+    - AppKit.NSPasteboard
+    """
+
+    def __init__(self) -> None:
+        appkit: Any = importlib.import_module("AppKit")
+
+        self.NSPasteboard = appkit.NSPasteboard
+        self.NSPasteboardNameGeneral = appkit.NSPasteboardNameGeneral
+        self.NSPasteboardTypeString = appkit.NSPasteboardTypeString
 
     def _pasteboard(self):
-        return self.NSPasteboard.pasteboardWithName_(self.NSPasteboardNameGeneral)
+        return self.NSPasteboard.pasteboardWithName_(
+            self.NSPasteboardNameGeneral
+        )
 
     def set_text(self, value: str) -> None:
         pasteboard = self._pasteboard()
         pasteboard.clearContents()
-        pasteboard.declareTypes_owner_([self.NSPasteboardTypeString], None)
-        pasteboard.setString_forType_(value, self.NSPasteboardTypeString)
+        pasteboard.declareTypes_owner_(
+            [self.NSPasteboardTypeString],
+            None,
+        )
+        pasteboard.setString_forType_(
+            value,
+            self.NSPasteboardTypeString,
+        )
 
     def get_text(self) -> str:
-        value = self._pasteboard().stringForType_(self.NSPasteboardTypeString)
+        value = self._pasteboard().stringForType_(
+            self.NSPasteboardTypeString
+        )
         return value or ""
 
     def clear(self) -> None:
@@ -76,12 +108,26 @@ class MacOSClipboardAdapter(ClipboardAdapter):
 
 
 class LinuxClipboardAdapter(ClipboardAdapter):
-    def __init__(self, selection: str = "clipboard"):
+    """
+    Linux adapter.
+
+    Поддерживает:
+    - Wayland через wl-copy / wl-paste
+    - X11 через xclip
+    - X11 через xsel
+    - fallback через pyperclip
+    """
+
+    def __init__(self, selection: str = "clipboard") -> None:
         self.selection = selection
 
     def set_text(self, value: str) -> None:
         if shutil.which("wl-copy"):
-            subprocess.run(["wl-copy"], input=value.encode("utf-8"), check=True)
+            subprocess.run(
+                ["wl-copy"],
+                input=value.encode("utf-8"),
+                check=True,
+            )
             return
 
         if shutil.which("xclip"):
@@ -104,7 +150,12 @@ class LinuxClipboardAdapter(ClipboardAdapter):
 
     def get_text(self) -> str:
         if shutil.which("wl-paste"):
-            result = subprocess.run(["wl-paste"], capture_output=True, text=True)
+            result = subprocess.run(
+                ["wl-paste"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
             return result.stdout
 
         if shutil.which("xclip"):
@@ -112,6 +163,7 @@ class LinuxClipboardAdapter(ClipboardAdapter):
                 ["xclip", "-selection", self.selection, "-o"],
                 capture_output=True,
                 text=True,
+                check=False,
             )
             return result.stdout
 
@@ -120,6 +172,7 @@ class LinuxClipboardAdapter(ClipboardAdapter):
                 ["xsel", f"--{self.selection}", "--output"],
                 capture_output=True,
                 text=True,
+                check=False,
             )
             return result.stdout
 
@@ -130,14 +183,16 @@ class LinuxClipboardAdapter(ClipboardAdapter):
 
 
 class PyperclipClipboardAdapter(ClipboardAdapter):
-    def set_text(self, value: str) -> None:
-        import pyperclip
+    """
+    Универсальный fallback.
+    """
 
+    def set_text(self, value: str) -> None:
+        pyperclip: Any = importlib.import_module("pyperclip")
         pyperclip.copy(value)
 
     def get_text(self) -> str:
-        import pyperclip
-
+        pyperclip: Any = importlib.import_module("pyperclip")
         return pyperclip.paste()
 
     def clear(self) -> None:
@@ -145,7 +200,11 @@ class PyperclipClipboardAdapter(ClipboardAdapter):
 
 
 class TkinterClipboardAdapter(ClipboardAdapter):
-    def __init__(self, root):
+    """
+    Последний fallback через Tkinter root.
+    """
+
+    def __init__(self, root) -> None:
         self.root = root
 
     def set_text(self, value: str) -> None:
@@ -186,4 +245,4 @@ def get_platform_clipboard_adapter(root=None) -> ClipboardAdapter:
         if root is not None:
             return TkinterClipboardAdapter(root)
 
-        raise RuntimeError("No clipboard adapter available")
+    raise RuntimeError("No clipboard adapter available")
