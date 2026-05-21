@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4
+from .models import SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5
 
 
 class SQLiteConnectionPool:
@@ -99,6 +99,10 @@ class Database:
             if version < 4:
                 self._migrate_v3_to_v4(conn)
                 version = 4
+
+            if version < 5:
+                self._migrate_v4_to_v5(conn)
+                version = 5
 
     def _apply_v1(self, conn: sqlite3.Connection):
         conn.executescript(SCHEMA_V1)
@@ -252,6 +256,79 @@ class Database:
 
         conn.execute("PRAGMA user_version = 4;")
         conn.commit()
+
+    def _migrate_v4_to_v5(self, conn: sqlite3.Connection):
+        conn.executescript(SCHEMA_V5)
+
+        old_exists = conn.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type='table' AND name='audit_log'
+            """
+        ).fetchone()
+
+        if old_exists:
+            columns_info = conn.execute("PRAGMA table_info(audit_log)").fetchall()
+            old_columns = {row["name"] for row in columns_info}
+
+            if not {
+                "sequence_number",
+                "previous_hash",
+                "entry_data",
+                "entry_hash",
+                "signature_algorithm",
+            }.issubset(old_columns):
+                conn.execute("DROP TABLE audit_log")
+                conn.execute("ALTER TABLE audit_log_new RENAME TO audit_log")
+            else:
+                conn.execute("DROP TABLE audit_log_new")
+        else:
+            conn.execute("ALTER TABLE audit_log_new RENAME TO audit_log")
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_timestamp_v5 ON audit_log(timestamp);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_event_type_v5 ON audit_log(event_type);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_sequence_v5 ON audit_log(sequence_number);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_severity_v5 ON audit_log(severity);")
+        self._install_audit_immutability(conn)
+        conn.execute("PRAGMA user_version = 5;")
+        conn.commit()
+
+    def _install_audit_immutability(self, conn: sqlite3.Connection):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_write_control (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                allow_mutation INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO audit_write_control(id, allow_mutation)
+            VALUES (1, 0)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS audit_log_no_update
+            BEFORE UPDATE ON audit_log
+            WHEN (SELECT allow_mutation FROM audit_write_control WHERE id = 1) = 0
+            BEGIN
+                SELECT RAISE(ABORT, 'audit_log is append-only');
+            END;
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS audit_log_no_delete
+            BEFORE DELETE ON audit_log
+            WHEN (SELECT allow_mutation FROM audit_write_control WHERE id = 1) = 0
+            BEGIN
+                SELECT RAISE(ABORT, 'audit_log is append-only');
+            END;
+            """
+        )
 
     def close_thread_connection(self):
         # Оставлено для совместимости со старым кодом.
