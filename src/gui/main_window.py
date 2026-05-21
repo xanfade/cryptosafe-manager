@@ -1,5 +1,6 @@
 import tkinter as tk
 import difflib
+import hashlib
 import shlex
 from tkinter import ttk, messagebox
 
@@ -14,6 +15,8 @@ from dataclasses import dataclass
 from tkinter import messagebox, simpledialog
 from src.gui.theme import apply_theme, COLORS, FONTS
 from src.core.clipboard.clipboard_settings import ClipboardSettingsRepository
+from src.core.events import AppShutdown, VaultUnlocked
+from src.core.events import VaultSearchPerformed
 from src.gui.widgets.clipboard_settings_dialog import ClipboardSettingsDialog
 
 
@@ -24,7 +27,7 @@ class ClipboardPreview:
     value: str
 
 class MainWindow(tk.Tk):
-    def __init__(self, db=None, key_manager=None, auth_service=None, event_bus=None):
+    def __init__(self, db=None, key_manager=None, auth_service=None, event_bus=None, audit_logger=None):
         super().__init__()
 
         apply_theme(self)
@@ -34,6 +37,7 @@ class MainWindow(tk.Tk):
         self.db = db
         self.key_manager = key_manager
         self.auth_service = auth_service
+        self.audit_logger = audit_logger
 
         self.clipboard_settings_repository = ClipboardSettingsRepository(
             db=self.db,
@@ -82,6 +86,8 @@ class MainWindow(tk.Tk):
         self._has_focus = True
         self._focus_out_job = None
         self._poll_job = None
+        self._audit_verification_job = None
+        self.audit_integrity_status = "not checked"
 
         self.title("CryptoSafe Manager")
         self.geometry("1450x850")
@@ -105,6 +111,7 @@ class MainWindow(tk.Tk):
 
         self._bind_auth_integration()
         self.after(1000, self._poll_session_state)
+        self._schedule_periodic_audit_verification(initial_delay_ms=2000)
 
         if self.auth_service and not self.auth_service.is_unlocked():
             self.apply_locked_state()
@@ -246,7 +253,7 @@ class MainWindow(tk.Tk):
         self.sidebar_logs_btn = self._make_sidebar_canvas_button(
             nav_frame,
             "📑  Журнал событий",
-            lambda: AuditLogViewer(self)
+            lambda: AuditLogViewer(self, db=self.db, signer=getattr(self.audit_logger, "signer", None))
         )
         self.sidebar_logs_btn.pack(fill="x", pady=3)
 
@@ -487,7 +494,10 @@ class MainWindow(tk.Tk):
             bg="#2b2b2b", fg="#ffffff",
             activebackground="#3a3a3a", activeforeground="#ffffff"
         )
-        view_menu.add_command(label="Logs", command=lambda: AuditLogViewer(self))
+        view_menu.add_command(
+            label="Logs",
+            command=lambda: AuditLogViewer(self, db=self.db, signer=getattr(self.audit_logger, "signer", None)),
+        )
         menubar.add_cascade(label="View", menu=view_menu)
 
         help_menu = tk.Menu(
@@ -721,6 +731,17 @@ class MainWindow(tk.Tk):
         )
         self.status_label.pack(side="left", fill="x", expand=True)
 
+        self.audit_status_label = tk.Label(
+            self.statusbar,
+            text="Audit: not checked",
+            bg="#171719",
+            fg="#a1a1aa",
+            font=("Arial", 10),
+            padx=12,
+            pady=7,
+        )
+        self.audit_status_label.pack(side="right", pady=4)
+
         self.clipboard_preview_button = self._make_canvas_button(
             self.statusbar,
             "📋 Буфер",
@@ -864,6 +885,7 @@ class MainWindow(tk.Tk):
         self.filtered_rows = self.filter_rows(self.all_rows, query)
         self.rows = self.filtered_rows
         self.refresh_table()
+        self._publish_search_audit(query, len(self.filtered_rows))
 
         total = len(self.all_rows)
         shown = len(self.filtered_rows)
@@ -872,6 +894,18 @@ class MainWindow(tk.Tk):
             self.set_status(f"Найдено записей: {shown} из {total}")
         else:
             self.set_status(f"Записей: {shown}")
+
+    def _publish_search_audit(self, query: str, result_count: int) -> None:
+        if not query or not self.event_bus:
+            return
+
+        query_hash = hashlib.sha256(query.encode("utf-8")).hexdigest()[:16]
+        self.event_bus.publish(
+            VaultSearchPerformed(
+                query_hash=query_hash,
+                result_count=result_count,
+            )
+        )
 
     def filter_rows(self, rows, query: str):
         if not query:
@@ -1316,6 +1350,8 @@ class MainWindow(tk.Tk):
 
     def apply_unlocked_state(self):
         self.locked = False
+        if self.event_bus:
+            self.event_bus.publish(VaultUnlocked(user="local"))
 
         self.set_custom_button_enabled(self.btn_unlock, False)
         self.set_custom_button_enabled(self.btn_lock, True)
@@ -1426,6 +1462,13 @@ class MainWindow(tk.Tk):
             self.after(1000, self._poll_session_state)
 
     def on_close(self):
+        if self._audit_verification_job is not None:
+            self.after_cancel(self._audit_verification_job)
+            self._audit_verification_job = None
+
+        if self.event_bus:
+            self.event_bus.publish(AppShutdown(reason="user_exit"))
+
         if hasattr(self, "clipboard_monitor"):
             self.clipboard_monitor.stop()
 
@@ -1668,6 +1711,51 @@ class MainWindow(tk.Tk):
             return bool(settings.notifications_enabled)
         except Exception:
             return True
+
+    def _schedule_periodic_audit_verification(self, initial_delay_ms: int | None = None):
+        if not self.audit_logger:
+            return
+
+        try:
+            interval_hours = max(
+                1,
+                int(self.db.get_setting("audit.verification.interval_hours", "24")),
+            )
+        except Exception:
+            interval_hours = 24
+
+        delay_ms = initial_delay_ms if initial_delay_ms is not None else interval_hours * 60 * 60 * 1000
+        self._audit_verification_job = self.after(delay_ms, self._run_periodic_audit_verification)
+
+    def _run_periodic_audit_verification(self):
+        self._audit_verification_job = None
+        try:
+            result = self.audit_logger.verify_recent()
+            self._update_audit_integrity_status(result)
+            self.audit_logger.handle_verification_result(
+                result,
+                source="periodic",
+                notify_callback=lambda _result: messagebox.showwarning(
+                    "Audit integrity",
+                    "Audit log integrity verification failed.",
+                    parent=self,
+                ),
+                lock_callback=self.apply_locked_state,
+            )
+        finally:
+            self._schedule_periodic_audit_verification()
+
+    def _update_audit_integrity_status(self, result):
+        if result.get("verified"):
+            text = f"Audit: valid ({result.get('valid_entries', 0)} checked)"
+            color = "#22c55e"
+        else:
+            text = "Audit: tampering detected"
+            color = "#ef4444"
+
+        self.audit_integrity_status = text
+        if hasattr(self, "audit_status_label"):
+            self.audit_status_label.config(text=text, fg=color)
 
 
 if __name__ == "__main__":
