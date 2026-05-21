@@ -1,5 +1,7 @@
 from __future__ import annotations
 from datetime import datetime, timezone
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from src.core.crypto.key_derivation import (
     Argon2Params,
@@ -171,6 +173,19 @@ class KeyManager:
 
     def get_encryption_key(self) -> bytes | None:
         return self.cache.get()
+
+    def derive_key(self, purpose: str, length: int = 32) -> bytes:
+        base_key = self.get_encryption_key()
+        if base_key is None:
+            raise RuntimeError("master key is not cached; unlock the vault before deriving audit keys")
+
+        bundle = self.load_bundle()
+        return HKDF(
+            algorithm=hashes.SHA256(),
+            length=length,
+            salt=bundle["enc_salt"],
+            info=purpose.encode("utf-8"),
+        ).derive(base_key)
 
     def has_cached_key(self) -> bool:
         return self.cache.has_key()
