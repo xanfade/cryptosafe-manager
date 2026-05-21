@@ -11,6 +11,7 @@ from typing import Callable, Optional
 from src.core.events import (
     ClipboardCopied,
     ClipboardCleared,
+    ClipboardAutoCleared,
     ClipboardSuspiciousActivity,
     ClipboardCopyBlocked,
 )
@@ -237,7 +238,7 @@ class ClipboardService:
 
         self._timer = threading.Timer(
             self.clear_after_seconds,
-            self.clear,
+            self._auto_clear,
         )
         self._timer.daemon = True
         self._timer.start()
@@ -269,6 +270,10 @@ class ClipboardService:
 
             self._notify("cleared")
 
+    def _auto_clear(self) -> None:
+        self.clear(publish_event=False)
+        self.event_bus.publish(ClipboardAutoCleared())
+
     def clear_on_lock(self) -> None:
         self.clear(publish_event=True)
 
@@ -299,7 +304,7 @@ class ClipboardService:
 
             self._timer = threading.Timer(
                 self.clear_after_seconds,
-                self.clear,
+                self._auto_clear,
             )
             self._timer.daemon = True
             self._timer.start()
