@@ -5,6 +5,7 @@ import secrets
 import string
 
 from src.core.crypto.authentication import validate_password_strength
+from src.core.events import PasswordChanged
 from src.core.password_rotation import PasswordRotationService
 
 
@@ -550,6 +551,9 @@ class PasswordChangeDialog(tk.Toplevel):
         self.status_dot.config(fg=self.SUCCESS)
         self.status_var.set("Смена пароля успешно завершена")
         self._set_busy_state(False)
+        event_bus = getattr(self.parent, "event_bus", None)
+        if event_bus:
+            event_bus.publish(PasswordChanged(user="local"))
         messagebox.showinfo("Успех", "Мастер-пароль успешно изменён", parent=self)
         self.destroy()
 
