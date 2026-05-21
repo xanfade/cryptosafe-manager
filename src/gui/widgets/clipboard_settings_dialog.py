@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 from src.core.clipboard.clipboard_settings import ClipboardSettings
+from src.core.events import ConfigurationChanged
 
 
 class ClipboardSettingsDialog(tk.Toplevel):
@@ -333,6 +334,14 @@ class ClipboardSettingsDialog(tk.Toplevel):
         try:
             saved = self.repository.save(settings)
             self.clipboard_service.apply_settings(saved)
+            event_bus = getattr(self.parent, "event_bus", None)
+            if event_bus:
+                event_bus.publish(
+                    ConfigurationChanged(
+                        setting_key="clipboard",
+                        source="clipboard_settings",
+                    )
+                )
 
             if saved.auto_clear_timeout_sec is None:
                 messagebox.showwarning(
