@@ -2,8 +2,9 @@ import base64
 import os
 import traceback
 import tkinter as tk
+from tkinter import messagebox
 
-from src.core.audit_logger import AuditLogger
+from src.core.audit import AuditLogger, AuditLogSigner
 from src.core.config import ConfigManager
 from src.core.events import EventBus
 from src.core.key_manager import KeyManager
@@ -46,9 +47,6 @@ def main():
 
     event_bus = EventBus()
 
-    audit_logger = AuditLogger(db)
-    audit_logger.subscribe(event_bus)
-
     key_manager = KeyManager(db)
 
     state_manager = StateManager()
@@ -88,6 +86,27 @@ def main():
             root.destroy()
             return
 
+    audit_logger = AuditLogger(db, AuditLogSigner.from_key_manager(key_manager))
+    audit_logger.subscribe(event_bus)
+    verification = audit_logger.verify_integrity()
+    if not verification["verified"]:
+        audit_logger.handle_verification_result(
+            verification,
+            source="startup",
+            notify_callback=lambda _result: messagebox.showwarning(
+                "Audit integrity",
+                "Audit log integrity verification failed. Review the audit log immediately.",
+                parent=root,
+            ),
+        )
+    audit_logger.log_event(
+        "SYSTEM_STARTUP",
+        "INFO",
+        "application",
+        {"message": "Application started"},
+        user_id="system",
+    )
+
     try:
         if root.winfo_exists():
             root.destroy()
@@ -99,6 +118,7 @@ def main():
         key_manager=key_manager,
         auth_service=auth_service,
         event_bus=event_bus,
+        audit_logger=audit_logger,
     )
     app.mainloop()
 
