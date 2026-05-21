@@ -85,3 +85,79 @@ CREATE TABLE IF NOT EXISTS vault_entries_new (
 CREATE INDEX IF NOT EXISTS idx_vault_created_v4 ON vault_entries_new(created_at);
 CREATE INDEX IF NOT EXISTS idx_vault_updated_v4 ON vault_entries_new(updated_at);
 """
+
+SCHEMA_V5 = """
+CREATE TABLE IF NOT EXISTS audit_log_new (
+    sequence_number INTEGER PRIMARY KEY AUTOINCREMENT,
+    previous_hash TEXT NOT NULL,
+    entry_data BLOB NOT NULL,
+    entry_hash TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    signature_algorithm TEXT NOT NULL DEFAULT 'Ed25519',
+    timestamp TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    entry_id INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_timestamp_v5 ON audit_log_new(timestamp);
+CREATE INDEX IF NOT EXISTS idx_audit_event_type_v5 ON audit_log_new(event_type);
+CREATE INDEX IF NOT EXISTS idx_audit_sequence_v5 ON audit_log_new(sequence_number);
+CREATE INDEX IF NOT EXISTS idx_audit_severity_v5 ON audit_log_new(severity);
+
+CREATE TABLE IF NOT EXISTS audit_write_control (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    allow_mutation INTEGER NOT NULL DEFAULT 0
+);
+
+INSERT OR IGNORE INTO audit_write_control(id, allow_mutation)
+VALUES (1, 0);
+
+CREATE TABLE IF NOT EXISTS audit_public_keys (
+    key_id TEXT PRIMARY KEY,
+    algorithm TEXT NOT NULL,
+    public_key TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_entry_keys (
+    sequence_number INTEGER PRIMARY KEY,
+    algorithm TEXT NOT NULL,
+    public_key TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_log_archive (
+    archive_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    archived_at TEXT NOT NULL,
+    first_sequence INTEGER NOT NULL,
+    last_sequence INTEGER NOT NULL,
+    entry_count INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    archive_data BLOB NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_archive_time_v5 ON audit_log_archive(archived_at);
+CREATE INDEX IF NOT EXISTS idx_audit_archive_range_v5 ON audit_log_archive(first_sequence, last_sequence);
+
+CREATE TABLE IF NOT EXISTS audit_security_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    details TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_security_time_v5 ON audit_security_log(timestamp);
+
+INSERT OR IGNORE INTO settings (setting_key, setting_value, encrypted)
+VALUES
+('audit.rotation.max_entries', '10000', 0),
+('audit.rotation.max_age_days', '365', 0),
+('audit.verification.interval_hours', '24', 0),
+('audit.verification.recent_entries', '1000', 0),
+('audit.export.schedule', 'disabled', 0),
+('audit.export.retention_days', '90', 0);
+"""
