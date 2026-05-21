@@ -6,6 +6,8 @@ from tkinter import ttk, messagebox
 
 from src.gui.password_change_dialog import PasswordChangeDialog
 from src.gui.widgets.audit_log_viewer import AuditLogViewer
+from src.gui.widgets.import_export_dialog import ImportExportDialog
+from src.gui.widgets.qr_exchange_window import QrExchangeWindow
 from src.gui.login_dialog import LoginDialog
 from src.core.services.vault_service import VaultService
 from src.gui.widgets.secure_table import SecureTable
@@ -257,6 +259,20 @@ class MainWindow(tk.Tk):
         )
         self.sidebar_logs_btn.pack(fill="x", pady=3)
 
+        self.sidebar_qr_btn = self._make_sidebar_canvas_button(
+            nav_frame,
+            "📷  QR Exchange",
+            self.open_qr_exchange
+        )
+        self.sidebar_qr_btn.pack(fill="x", pady=3)
+
+        self.sidebar_import_export_btn = self._make_sidebar_canvas_button(
+            nav_frame,
+            "⇄  Import / Export",
+            self.open_import_export_dialog
+        )
+        self.sidebar_import_export_btn.pack(fill="x", pady=3)
+
         bottom_frame = tk.Frame(self.sidebar, bg="#171719")
         bottom_frame.pack(side="bottom", fill="x", padx=12, pady=18)
 
@@ -457,6 +473,7 @@ class MainWindow(tk.Tk):
         )
         file_menu.add_command(label="Разблокировать", command=self.unlock_vault)
         file_menu.add_command(label="Заблокировать", command=self.lock_vault)
+        file_menu.add_command(label="Import / Export", command=self.open_import_export_dialog)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.on_close)
         menubar.add_cascade(label="File", menu=file_menu)
@@ -497,6 +514,14 @@ class MainWindow(tk.Tk):
         view_menu.add_command(
             label="Logs",
             command=lambda: AuditLogViewer(self, db=self.db, signer=getattr(self.audit_logger, "signer", None)),
+        )
+        view_menu.add_command(
+            label="QR Exchange",
+            command=self.open_qr_exchange,
+        )
+        view_menu.add_command(
+            label="Import / Export",
+            command=self.open_import_export_dialog,
         )
         menubar.add_cascade(label="View", menu=view_menu)
 
@@ -1687,6 +1712,31 @@ class MainWindow(tk.Tk):
         self.wait_window(dialog)
 
         return bool(getattr(dialog, "result", False))
+
+    def open_qr_exchange(self):
+        if self.locked:
+            messagebox.showwarning("Хранилище заблокировано", "Сначала разблокируй хранилище", parent=self)
+            return
+
+        QrExchangeWindow(
+            self,
+            db=self.db,
+            vault_service=self.vault_service,
+            key_manager=self.key_manager,
+        )
+
+    def open_import_export_dialog(self):
+        if self.locked:
+            messagebox.showwarning("Хранилище заблокировано", "Сначала разблокируй хранилище", parent=self)
+            return
+
+        ImportExportDialog(
+            self,
+            db=self.db,
+            vault_service=self.vault_service,
+            key_manager=self.key_manager,
+            event_bus=self.event_bus,
+        )
 
     def get_clipboard_timeout_text(self):
         timeout = self.clipboard_service.clear_after_seconds

@@ -21,10 +21,12 @@ from src.core.events import (
     ClipboardCleared,
     ClipboardCopied,
     ClipboardCopyBlocked,
+    ClipboardImageScanned,
     ClipboardSuspiciousActivity,
     ConfigurationChanged,
     EntryCreated,
     EntryDeleted,
+    EntryShared,
     EntryListViewed,
     EntryRead,
     EntryUpdated,
@@ -34,6 +36,8 @@ from src.core.events import (
     TotpAccessed,
     UserLoggedIn,
     UserLoggedOut,
+    VaultDataImported,
+    VaultDataExported,
     VaultSearchPerformed,
     VaultUnlocked,
 )
@@ -105,9 +109,13 @@ class AuditLogger:
             ClipboardCopied: self.on_clipboard_copied,
             ClipboardCleared: self.on_clipboard_cleared,
             ClipboardAutoCleared: self.on_clipboard_auto_cleared,
+            ClipboardImageScanned: self.on_clipboard_image_scanned,
             ClipboardSuspiciousActivity: self.on_clipboard_suspicious_activity,
             ClipboardCopyBlocked: self.on_clipboard_copy_blocked,
             ConfigurationChanged: self.on_configuration_changed,
+            VaultDataExported: self.on_vault_data_exported,
+            VaultDataImported: self.on_vault_data_imported,
+            EntryShared: self.on_entry_shared,
             AuditDataImported: self.on_audit_data_imported,
             PanicModeActivated: self.on_panic_mode_activated,
             TotpAccessed: self.on_totp_accessed,
@@ -673,6 +681,9 @@ class AuditLogger:
     def on_clipboard_auto_cleared(self, e: ClipboardAutoCleared):
         self.log_event("CLIPBOARD_AUTO_CLEAR", AuditSeverity.INFO, "clipboard", self._event_dict(e))
 
+    def on_clipboard_image_scanned(self, e: ClipboardImageScanned):
+        self.log_event("CLIPBOARD_IMAGE_SCANNED", AuditSeverity.INFO, "clipboard", self._event_dict(e))
+
     def on_clipboard_suspicious_activity(self, e: ClipboardSuspiciousActivity):
         self.log_event("SECURITY_CLIPBOARD_SUSPICIOUS", AuditSeverity.WARN, "clipboard", self._event_dict(e), entry_id=e.entry_id)
 
@@ -681,6 +692,15 @@ class AuditLogger:
 
     def on_configuration_changed(self, e: ConfigurationChanged):
         self.log_event("CONFIG_CHANGED", AuditSeverity.INFO, e.source, self._event_dict(e))
+
+    def on_vault_data_exported(self, e: VaultDataExported):
+        self.log_event("VAULT_DATA_EXPORTED", AuditSeverity.INFO, "import_export", self._event_dict(e), user_id="system")
+
+    def on_vault_data_imported(self, e: VaultDataImported):
+        self.log_event("VAULT_DATA_IMPORTED", AuditSeverity.INFO, "import_export", self._event_dict(e), user_id="system")
+
+    def on_entry_shared(self, e: EntryShared):
+        self.log_event("VAULT_ENTRY_SHARED", AuditSeverity.INFO, "sharing_service", self._event_dict(e), entry_id=e.entry_id, user_id="system")
 
     def on_audit_data_imported(self, e: AuditDataImported):
         self.log_event("AUDIT_LOG_IMPORTED", AuditSeverity.INFO, "audit_import", self._event_dict(e), user_id="system")

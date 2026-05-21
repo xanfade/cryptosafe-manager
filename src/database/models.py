@@ -161,3 +161,34 @@ VALUES
 ('audit.export.schedule', 'disabled', 0),
 ('audit.export.retention_days', '90', 0);
 """
+
+SCHEMA_V6 = """
+CREATE TABLE IF NOT EXISTS shared_entries (
+    shared_id TEXT PRIMARY KEY,
+    original_entry_id INTEGER,
+    encryption_method TEXT NOT NULL,
+    recipient_info TEXT NOT NULL,
+    permissions TEXT NOT NULL,
+    shared_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_shared_entries_original_v6 ON shared_entries(original_entry_id);
+CREATE INDEX IF NOT EXISTS idx_shared_entries_shared_at_v6 ON shared_entries(shared_at);
+CREATE INDEX IF NOT EXISTS idx_shared_entries_expires_at_v6 ON shared_entries(expires_at);
+
+CREATE TABLE IF NOT EXISTS import_export_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation_type TEXT NOT NULL,
+    format TEXT NOT NULL,
+    encryption_used TEXT,
+    entry_count INTEGER NOT NULL DEFAULT 0,
+    file_size INTEGER NOT NULL DEFAULT 0,
+    checksum TEXT,
+    verification_status TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_import_export_history_time_v6 ON import_export_history(created_at);
+CREATE INDEX IF NOT EXISTS idx_import_export_history_type_v6 ON import_export_history(operation_type);
+"""

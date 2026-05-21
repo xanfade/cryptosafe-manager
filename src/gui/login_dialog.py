@@ -7,6 +7,7 @@ class LoginDialog(tk.Toplevel):
         super().__init__(parent)
         self.auth_service = auth_service
         self.result = False
+        self.entered_password = ""
 
         self.title("Вход в CryptoSafe Manager")
         self.geometry("400x230")
@@ -117,6 +118,7 @@ class LoginDialog(tk.Toplevel):
 
     def do_login(self):
         password = self.password.get()
+        self.entered_password = password
 
         self.login_btn.unbind("<Button-1>")
         self.login_btn.config(bg="#4c1d95", fg="#c4b5fd")

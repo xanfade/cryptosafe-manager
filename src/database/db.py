@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5
+from .models import SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6
 
 
 class SQLiteConnectionPool:
@@ -103,6 +103,10 @@ class Database:
             if version < 5:
                 self._migrate_v4_to_v5(conn)
                 version = 5
+
+            if version < 6:
+                self._migrate_v5_to_v6(conn)
+                version = 6
 
     def _apply_v1(self, conn: sqlite3.Connection):
         conn.executescript(SCHEMA_V1)
@@ -330,6 +334,11 @@ class Database:
             """
         )
 
+    def _migrate_v5_to_v6(self, conn: sqlite3.Connection):
+        conn.executescript(SCHEMA_V6)
+        conn.execute("PRAGMA user_version = 6;")
+        conn.commit()
+
     def close_thread_connection(self):
         # Оставлено для совместимости со старым кодом.
         # Теперь соединения управляются пулом.
@@ -359,5 +368,68 @@ class Database:
                     encrypted = excluded.encrypted
                 """,
                 (key, value, encrypted),
+            )
+            conn.commit()
+
+    def record_shared_entry(
+        self,
+        shared_id: str,
+        original_entry_id: int | None,
+        encryption_method: str,
+        recipient_info: str,
+        permissions: str,
+        shared_at: str,
+        expires_at: str,
+    ) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO shared_entries(
+                    shared_id, original_entry_id, encryption_method, recipient_info,
+                    permissions, shared_at, expires_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    shared_id,
+                    original_entry_id,
+                    encryption_method,
+                    recipient_info,
+                    permissions,
+                    shared_at,
+                    expires_at,
+                ),
+            )
+            conn.commit()
+
+    def record_import_export_history(
+        self,
+        operation_type: str,
+        format: str,
+        encryption_used: str | None,
+        entry_count: int,
+        file_size: int,
+        checksum: str | None,
+        verification_status: str | None,
+    ) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO import_export_history(
+                    operation_type, format, encryption_used, entry_count,
+                    file_size, checksum, verification_status, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    operation_type,
+                    format,
+                    encryption_used,
+                    entry_count,
+                    file_size,
+                    checksum,
+                    verification_status,
+                    datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                ),
             )
             conn.commit()

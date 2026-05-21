@@ -122,6 +122,51 @@ class AuditDataImported:
 
 
 @dataclass
+class VaultDataExported:
+    format: str = "json"
+    entry_count: int = 0
+    scope: str = "full"
+    encrypted: bool = True
+    protection_mode: str = "master"
+
+
+@dataclass
+class VaultDataImported:
+    format: str = "json"
+    entry_count: int = 0
+    imported_count: int = 0
+    updated_count: int = 0
+    mode: str = "merge"
+
+
+@dataclass
+class EntryShared:
+    entry_id: int
+    recipient: str
+    method: str = "public_key"
+    delivery: str = "qr"
+    permission: str = "read-only"
+    expires_in_days: int = 7
+
+
+@dataclass
+class ClipboardImageScanned:
+    source: str = "clipboard"
+
+
+@dataclass
+class CloudSyncRequested:
+    provider: str = "future"
+    scope: str = "vault_export"
+
+
+@dataclass
+class NetworkShareRequested:
+    protocol: str = "future"
+    recipient: str = ""
+
+
+@dataclass
 class PanicModeActivated:
     reason: str = "manual"
 
