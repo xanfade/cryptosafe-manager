@@ -51,7 +51,7 @@ class SetupWizard(tk.Toplevel):
     def _center_window(self):
         self.update_idletasks()
         width = 560
-        height = 660
+        height = 800
         x = (self.winfo_screenwidth() // 2) - (width // 2)
         y = (self.winfo_screenheight() // 2) - (height // 2)
         self.geometry(f"{width}x{height}+{x}+{y}")
