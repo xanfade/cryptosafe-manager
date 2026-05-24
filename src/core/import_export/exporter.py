@@ -59,6 +59,23 @@ class VaultExporter:
             "compressed": compress,
             "compression": "gzip" if compress else None,
         }
+        if fmt == "bitwarden_encrypted_json":
+            if protection_mode != "password":
+                raise PermissionError("bitwarden encrypted json export requires password mode")
+            if compress:
+                raise ValueError("bitwarden encrypted json export does not support gzip compression")
+            payload = handler.serialize(entries, password=export_password)
+            if self.event_bus is not None:
+                self.event_bus.publish(
+                    VaultDataExported(
+                        format=fmt,
+                        entry_count=len(entries),
+                        scope="selective" if entry_ids else "full",
+                        encrypted=True,
+                        protection_mode=protection_mode,
+                    )
+                )
+            return payload
         serialized = handler.serialize(entries, metadata=metadata if fmt in {"csv", "lastpass_csv"} else None)
         payload_bytes = gzip.compress(serialized) if compress else serialized
         if not encrypt:

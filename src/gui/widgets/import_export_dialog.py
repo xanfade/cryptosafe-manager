@@ -18,6 +18,7 @@ FORMAT_DESCRIPTIONS = {
     "json": "Encrypted native JSON with full metadata and integrity protection.",
     "csv": "CSV export for migration and spreadsheet workflows.",
     "bitwarden_json": "Bitwarden-compatible JSON structure.",
+    "bitwarden_encrypted_json": "Password-protected Bitwarden encrypted JSON export.",
     "lastpass_csv": "LastPass CSV layout for migration.",
     "password_manager_json": "Generic password-manager JSON structure.",
 }
@@ -86,7 +87,7 @@ class ImportExportDialog(tk.Toplevel):
         self.export_query = tk.StringVar()
 
         tk.Label(left, text="Format", bg=COLORS["bg"], fg=COLORS["text"], font=FONTS["subtitle"]).pack(anchor="w")
-        fmt = ttk.Combobox(left, textvariable=self.export_format, state="readonly", values=["json", "csv", "bitwarden_json", "lastpass_csv", "password_manager_json"], width=26)
+        fmt = ttk.Combobox(left, textvariable=self.export_format, state="readonly", values=["json", "csv", "bitwarden_json", "bitwarden_encrypted_json", "lastpass_csv", "password_manager_json"], width=26)
         fmt.pack(fill="x", pady=(4, 8))
         fmt.bind("<<ComboboxSelected>>", lambda _e: self._update_export_description())
         self.export_desc = tk.Label(left, text="", bg=COLORS["bg"], fg=COLORS["muted"], justify="left", wraplength=280)
@@ -219,6 +220,9 @@ class ImportExportDialog(tk.Toplevel):
 
     def _update_export_description(self):
         self.export_desc.config(text=FORMAT_DESCRIPTIONS.get(self.export_format.get(), ""))
+        if self.export_format.get() == "bitwarden_encrypted_json":
+            self.export_encryption.set("password")
+            self.export_compress.set(False)
         contacts = self.key_exchange.list_contacts()
         self.export_recipient_combo["values"] = sorted(contacts.keys())
 
@@ -365,6 +369,7 @@ class ImportExportDialog(tk.Toplevel):
             "json": "JSON",
             "csv": "CSV",
             "bitwarden_json": "Bitwarden JSON",
+            "bitwarden_encrypted_json": "Bitwarden Encrypted JSON",
             "lastpass_csv": "LastPass CSV",
         }
         return mapping.get(self.importer.detect_format(raw), "Unknown")
@@ -592,6 +597,7 @@ class ImportExportDialog(tk.Toplevel):
             "JSON": "json",
             "CSV": "csv",
             "Bitwarden JSON": "bitwarden_json",
+            "Bitwarden Encrypted JSON": "bitwarden_encrypted_json",
             "LastPass CSV": "lastpass_csv",
         }
         return mapping.get(self.current_import_format or "")

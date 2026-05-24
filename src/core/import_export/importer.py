@@ -146,10 +146,13 @@ class VaultImporter:
             "json": "json",
             "csv": "csv",
             "bitwarden_json": "bitwarden_json",
+            "bitwarden_encrypted_json": "bitwarden_encrypted_json",
             "lastpass_csv": "lastpass_csv",
         }.get(detected)
         if handler_name is None:
             raise ValueError(f"unsupported import payload format: {detected}")
+        if handler_name == "bitwarden_encrypted_json":
+            return get_format_handler(handler_name).deserialize(raw_payload, password=import_password)
         return get_format_handler(handler_name).deserialize(raw_payload)
 
     @staticmethod
@@ -164,6 +167,13 @@ class VaultImporter:
                 return "encrypted_json"
             if isinstance(data, dict) and data.get("metadata", {}).get("package_format") == "cryptosafe.vault-export.encrypted.v1":
                 return "encrypted_json"
+            if (
+                isinstance(data, dict)
+                and data.get("encrypted") is True
+                and data.get("passwordProtected") is True
+                and "data" in data
+            ):
+                return "bitwarden_encrypted_json"
             if isinstance(data, dict) and "items" in data:
                 return "bitwarden_json"
             return "json"

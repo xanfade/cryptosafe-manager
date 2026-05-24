@@ -893,6 +893,70 @@ def test_import_supports_bitwarden_json_and_lastpass_csv(vault_service, unlocked
     assert lp_result.preview_entries[0]["username"] == "compat@example.com"
 
 
+def test_bitwarden_encrypted_json_export_does_not_expose_plaintext(vault_service, unlocked_key_manager):
+    vault_service.create_entry(
+        {
+            "title": "BW Secret",
+            "username": "secret-bw@example.com",
+            "password": "StrongPass123!",
+            "url": "https://secret-bw.example.com",
+            "notes": "private note",
+            "category": "folder",
+            "tags": "tag",
+        }
+    )
+    exporter = VaultExporter(vault_service, unlocked_key_manager)
+
+    payload = exporter.export_vault(
+        fmt="bitwarden_encrypted_json",
+        protection_mode="password",
+        export_password="ExportPass123!",
+    )
+    text = payload.decode("utf-8")
+    package = json.loads(text)
+
+    assert package["encrypted"] is True
+    assert package["passwordProtected"] is True
+    assert package["kdfType"] == 0
+    assert package["kdfIterations"] == 600000
+    assert package["data"].startswith("2.")
+    assert package["encKeyValidation_DO_NOT_EDIT"].startswith("2.")
+    assert "secret-bw@example.com" not in text
+    assert "StrongPass123!" not in text
+    assert "https://secret-bw.example.com" not in text
+    assert "private note" not in text
+
+    importer = VaultImporter(vault_service, unlocked_key_manager)
+    result = importer.import_package(payload, import_password="ExportPass123!", mode="dry-run")
+    assert result.preview_entries[0]["username"] == "secret-bw@example.com"
+    assert result.preview_entries[0]["password"] == "StrongPass123!"
+    assert result.preview_entries[0]["url"] == "https://secret-bw.example.com"
+
+    with pytest.raises(Exception):
+        importer.import_package(payload, import_password="WrongPass123!", mode="dry-run")
+
+
+def test_bitwarden_encrypted_json_requires_password_mode(vault_service, unlocked_key_manager):
+    vault_service.create_entry(
+        {
+            "title": "BW Secret",
+            "username": "secret-bw@example.com",
+            "password": "StrongPass123!",
+            "url": "https://secret-bw.example.com",
+            "notes": "private note",
+            "category": "folder",
+            "tags": "tag",
+        }
+    )
+    exporter = VaultExporter(vault_service, unlocked_key_manager)
+
+    with pytest.raises(PermissionError):
+        exporter.export_vault(
+            fmt="bitwarden_encrypted_json",
+            confirmation_password="A_StrongPass123!",
+        )
+
+
 def test_import_supports_direct_bitwarden_json_and_lastpass_csv(vault_service, unlocked_key_manager):
     importer = VaultImporter(vault_service, unlocked_key_manager)
 
