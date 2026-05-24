@@ -7,11 +7,16 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-import cv2
+import numpy as np
 import qrcode
 from PIL import Image
+from PIL import ImageOps
 from PIL.PngImagePlugin import PngInfo
 from qrcode.constants import ERROR_CORRECT_Q
+try:
+    import zxingcpp
+except ImportError:  # pragma: no cover - optional runtime dependency
+    zxingcpp = None
 
 
 @dataclass(slots=True)
@@ -94,7 +99,11 @@ class QrPayloadService:
         chunks = []
         for path in image_paths:
             found_for_path = False
-            image = cv2.imread(path)
+            try:
+                with Image.open(path) as pil_image:
+                    image = pil_image.convert("RGB")
+            except Exception as exc:
+                raise ValueError(f"unable to read image: {path}") from exc
             if image is None:
                 raise ValueError(f"unable to read image: {path}")
             for item in self._decode_candidates(image):
@@ -145,40 +154,37 @@ class QrPayloadService:
 
     @staticmethod
     def _decode_candidates(image) -> list[str]:
-        detector = cv2.QRCodeDetector()
+        pil_image = QrPayloadService._to_pil_image(image)
         candidates = []
-        if len(image.shape) == 3:
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = image
+        gray = ImageOps.grayscale(pil_image)
         candidates.append(gray)
-        candidates.append(cv2.resize(gray, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_LINEAR))
-        candidates.append(cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_NEAREST))
-        candidates.append(cv2.resize(gray, None, fx=0.75, fy=0.75, interpolation=cv2.INTER_AREA))
-        _ret, thresholded = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        candidates.append(thresholded)
-        candidates.append(cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2))
+        candidates.append(gray.resize((int(gray.width * 1.5), int(gray.height * 1.5)), resample=Image.Resampling.BILINEAR))
+        candidates.append(gray.resize((int(gray.width * 2.0), int(gray.height * 2.0)), resample=Image.Resampling.NEAREST))
+        candidates.append(gray.resize((max(1, int(gray.width * 0.75)), max(1, int(gray.height * 0.75))), resample=Image.Resampling.BOX))
+        candidates.append(ImageOps.autocontrast(gray))
+        candidates.append(gray.point(lambda px: 255 if px > 127 else 0))
         decoded = []
         seen = set()
+        if zxingcpp is None:
+            return decoded
         for candidate in candidates:
-            ok, decoded_info, _points, _ = detector.detectAndDecodeMulti(candidate)
-            if ok:
-                for item in decoded_info:
-                    if item and item not in seen:
-                        decoded.append(QrPayloadService._normalize_chunk_text(item))
-                        seen.add(item)
-                continue
-            value, _points, _ = detector.detectAndDecode(candidate)
-            if value and value not in seen:
-                decoded.append(QrPayloadService._normalize_chunk_text(value))
-                seen.add(value)
-                continue
-            curved_result = detector.detectAndDecodeCurved(candidate)
-            curved_value = curved_result[0] if isinstance(curved_result, tuple) else curved_result
-            if curved_value and curved_value not in seen:
-                decoded.append(QrPayloadService._normalize_chunk_text(curved_value))
-                seen.add(curved_value)
+            for barcode in zxingcpp.read_barcodes(np.asarray(candidate)):
+                item = barcode.text
+                if item and item not in seen:
+                    decoded.append(QrPayloadService._normalize_chunk_text(item))
+                    seen.add(item)
         return decoded
+
+    @staticmethod
+    def _to_pil_image(image) -> Image.Image:
+        if isinstance(image, Image.Image):
+            return image.convert("RGB")
+        if isinstance(image, np.ndarray):
+            if image.ndim == 2:
+                return Image.fromarray(image.astype(np.uint8), mode="L")
+            if image.ndim == 3:
+                return Image.fromarray(image.astype(np.uint8), mode="RGB")
+        raise TypeError("unsupported frame type")
 
     @classmethod
     def _serialize_chunk(cls, chunk: dict) -> str:

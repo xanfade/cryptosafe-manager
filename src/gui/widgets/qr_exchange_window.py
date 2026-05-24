@@ -6,7 +6,6 @@ import tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-import cv2
 import numpy as np
 from PIL import ImageGrab, ImageTk
 
@@ -312,7 +311,7 @@ class QrExchangeWindow(tk.Toplevel):
             if image is None or not hasattr(image, "convert"):
                 raise ValueError("clipboard does not contain an image")
             rgb = image.convert("RGB")
-            frame = cv2.cvtColor(np.array(rgb), cv2.COLOR_RGB2BGR)
+            frame = np.array(rgb)
             values = self.qr.decode_frame(frame)
             if not values:
                 raise ValueError("no QR code found in clipboard image")
@@ -324,14 +323,14 @@ class QrExchangeWindow(tk.Toplevel):
             messagebox.showerror("QR scan", str(exc), parent=self)
 
     def _scan_camera_once(self):
-        camera = cv2.VideoCapture(0)
-        if not camera.isOpened():
-            messagebox.showwarning("QR scan", "Camera is not available on this device.", parent=self)
+        try:
+            import imageio.v3 as iio
+        except Exception:
+            messagebox.showwarning("QR scan", "Camera backend is not installed. Add imageio to enable camera scanning.", parent=self)
             return
         try:
-            for _ in range(120):
-                ok, frame = camera.read()
-                if not ok:
+            for frame in iio.imiter("<video0>"):
+                if frame is None:
                     continue
                 values = self.qr.decode_frame(frame)
                 if values:
@@ -341,8 +340,6 @@ class QrExchangeWindow(tk.Toplevel):
             messagebox.showinfo("QR scan", "No QR code detected from camera.", parent=self)
         except Exception as exc:
             messagebox.showerror("QR scan", str(exc), parent=self)
-        finally:
-            camera.release()
 
     def _set_scanned_payload(self, payload_type: str, payload: bytes):
         self.scanned_type = payload_type

@@ -3,7 +3,6 @@ import json
 import time
 import tracemalloc
 
-import cv2
 import pytest
 
 from src.core.import_export import (
