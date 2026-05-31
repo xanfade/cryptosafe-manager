@@ -9,6 +9,7 @@ from typing import Any
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
+from src.core.security.side_channel_protection import constant_time_compare_str
 from src.database.db import Database
 
 
@@ -94,7 +95,7 @@ class AuditLogVerifier:
             computed_hash = hashlib.sha256(entry_data).hexdigest()
             entry_valid = True
 
-            if computed_hash != stored_hash:
+            if not constant_time_compare_str(computed_hash, stored_hash):
                 result.invalid_entries.append(
                     VerificationIssue(seq, "Hash mismatch", stored_hash, computed_hash)
                 )
@@ -106,7 +107,7 @@ class AuditLogVerifier:
                 result.verified = False
                 entry_valid = False
 
-            if previous_hash is not None and previous_hash_field != previous_hash:
+            if previous_hash is not None and not constant_time_compare_str(previous_hash_field, previous_hash):
                 result.chain_breaks.append(
                     VerificationIssue(seq, "Hash chain break", previous_hash, previous_hash_field)
                 )
@@ -164,7 +165,7 @@ class SignedJsonAuditVerifier:
             computed_hash = hashlib.sha256(entry_data).hexdigest()
             entry_valid = True
 
-            if computed_hash != entry_hash:
+            if not constant_time_compare_str(computed_hash, entry_hash):
                 invalid_entries.append({"sequence_number": sequence, "reason": "Hash mismatch"})
                 entry_valid = False
 
@@ -174,7 +175,7 @@ class SignedJsonAuditVerifier:
                 invalid_entries.append({"sequence_number": sequence, "reason": "Invalid signature"})
                 entry_valid = False
 
-            if previous_hash is not None and item["previous_hash"] != previous_hash:
+            if previous_hash is not None and not constant_time_compare_str(item["previous_hash"], previous_hash):
                 chain_breaks.append(
                     {
                         "sequence_number": sequence,
