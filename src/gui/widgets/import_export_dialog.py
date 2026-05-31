@@ -32,8 +32,20 @@ class ImportExportDialog(tk.Toplevel):
         self.key_manager = key_manager
         self.event_bus = event_bus
         self.key_exchange = KeyExchangeService.from_database(db, algorithm="p256")
-        self.exporter = VaultExporter(vault_service, key_manager, event_bus=event_bus, key_exchange=self.key_exchange)
-        self.importer = VaultImporter(vault_service, key_manager, key_exchange=self.key_exchange)
+        panic_checker = lambda: bool(getattr(master, "_panic_in_progress", False))
+        self.exporter = VaultExporter(
+            vault_service,
+            key_manager,
+            event_bus=event_bus,
+            key_exchange=self.key_exchange,
+            panic_checker=panic_checker,
+        )
+        self.importer = VaultImporter(
+            vault_service,
+            key_manager,
+            key_exchange=self.key_exchange,
+            panic_checker=panic_checker,
+        )
         self.sharing = SecureSharingService(self.exporter, importer=self.importer, key_exchange=self.key_exchange)
 
         self.selected_export_ids: set[int] = set()

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import shlex
+import hashlib
 from typing import Any
 
 from src.core.events import EntryListViewed, EntryRead
+from src.core.security.side_channel_protection import constant_time_compare_str
 from src.core.vault.entry_manager import EntryManager
 
 
@@ -34,6 +36,15 @@ class VaultService:
             self.event_bus.publish(EntryListViewed(count=len(entries)))
         return entries
 
+    def count_entries(self) -> int:
+        return self.manager.count_entries()
+
+    def get_entries_page(self, limit: int, offset: int = 0):
+        entries = self.manager.get_entries_page(limit=limit, offset=offset)
+        if self.event_bus:
+            self.event_bus.publish(EntryListViewed(count=len(entries)))
+        return entries
+
     def list_entries(self):
         return self.manager.get_all_entries()
 
@@ -57,7 +68,7 @@ class VaultService:
                 str(getattr(entry, field, "") or "").lower()
                 for field in ("title", "username", "url", "notes", "category", "tags")
             )
-            if all(token in haystack for token in tokens):
+            if all(self._contains_token_constant_time(haystack, token) for token in tokens):
                 rows.append(entry)
         return rows
 
@@ -68,3 +79,20 @@ class VaultService:
         except ValueError:
             parts = (query or "").split()
         return [part.strip().lower() for part in parts if part.strip()]
+
+    @staticmethod
+    def _contains_token_constant_time(haystack: str, token: str) -> bool:
+        # Compare token against all candidate windows without early exit.
+        if not token:
+            return True
+        if len(token) > len(haystack):
+            return False
+        wanted = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        matched = False
+        width = len(token)
+        for idx in range(0, len(haystack) - width + 1):
+            candidate = haystack[idx: idx + width]
+            digest = hashlib.sha256(candidate.encode("utf-8")).hexdigest()
+            same = constant_time_compare_str(digest, wanted)
+            matched = matched or same
+        return matched

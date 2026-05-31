@@ -30,6 +30,7 @@ class EntryManager:
         self.key_manager = key_manager
         self.event_bus = event_bus
         self.crypto = VaultEncryptionService(key_manager)
+        self._soft_delete_supported: bool | None = None
 
     @staticmethod
     def _utc_now_iso() -> str:
@@ -44,6 +45,11 @@ class EntryManager:
         rows = conn.execute("PRAGMA table_info(vault_entries)").fetchall()
         column_names = {row["name"] for row in rows}
         return "is_deleted" in column_names
+
+    def _soft_delete_enabled(self, conn) -> bool:
+        if self._soft_delete_supported is None:
+            self._soft_delete_supported = self._has_is_deleted_column(conn)
+        return self._soft_delete_supported
 
     def _build_payload_from_dict(
         self,
@@ -123,7 +129,7 @@ class EntryManager:
 
     def get_entry(self, entry_id: int) -> Entry | None:
         with self.db.connection() as conn:
-            has_soft_delete = self._has_is_deleted_column(conn)
+            has_soft_delete = self._soft_delete_enabled(conn)
 
             if has_soft_delete:
                 row = conn.execute(
@@ -152,7 +158,7 @@ class EntryManager:
 
     def get_all_entries(self) -> list[Entry]:
         with self.db.connection() as conn:
-            has_soft_delete = self._has_is_deleted_column(conn)
+            has_soft_delete = self._soft_delete_enabled(conn)
 
             if has_soft_delete:
                 rows = conn.execute(
@@ -222,7 +228,7 @@ class EntryManager:
 
         with self.db.connection() as conn:
             try:
-                has_soft_delete = self._has_is_deleted_column(conn)
+                has_soft_delete = self._soft_delete_enabled(conn)
 
                 if soft_delete and has_soft_delete:
                     cursor = conn.execute(
@@ -249,3 +255,43 @@ class EntryManager:
 
         if self.event_bus:
             self.event_bus.publish(EntryDeleted(entry_id=entry_id))
+
+    def count_entries(self) -> int:
+        with self.db.connection() as conn:
+            has_soft_delete = self._soft_delete_enabled(conn)
+            if has_soft_delete:
+                row = conn.execute("SELECT COUNT(*) AS cnt FROM vault_entries WHERE is_deleted = 0").fetchone()
+            else:
+                row = conn.execute("SELECT COUNT(*) AS cnt FROM vault_entries").fetchone()
+        return int(row["cnt"])
+
+    def get_entries_page(self, limit: int, offset: int = 0) -> list[Entry]:
+        with self.db.connection() as conn:
+            has_soft_delete = self._soft_delete_enabled(conn)
+            if has_soft_delete:
+                rows = conn.execute(
+                    """
+                    SELECT id, encrypted_data, created_at, updated_at, tags
+                    FROM vault_entries
+                    WHERE is_deleted = 0
+                    ORDER BY id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (int(limit), int(offset)),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, encrypted_data, created_at, updated_at, tags
+                    FROM vault_entries
+                    ORDER BY id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (int(limit), int(offset)),
+                ).fetchall()
+
+        entries: list[Entry] = []
+        for row in rows:
+            payload = self.crypto.decrypt_entry_payload(row["encrypted_data"])
+            entries.append(self._row_to_entry(row, payload))
+        return entries

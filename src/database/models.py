@@ -69,7 +69,7 @@ VALUES
 ('password_policy.require_special', 'true', 0),
 ('key_derivation.argon2', '{"time_cost":3,"memory_cost":65536,"parallelism":2,"hash_len":32,"salt_len":16}', 0),
 ('key_derivation.pbkdf2', '{"iterations":100000,"dklen":32,"hash_name":"sha256","salt_len":16}', 0),
-('security.auto_lock_timeout_sec', '900', 0),
+('security.auto_lock_timeout_sec', '300', 0),
 ('clipboard.clear_timeout_sec', '30', 0);
 """
 

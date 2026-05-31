@@ -7,7 +7,7 @@ import hmac
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from src.core.crypto.key_derivation import PBKDF2Params, derive_encryption_key, verify_auth_hash
@@ -21,11 +21,19 @@ class VaultExporter:
     KEY_PURPOSE = "vault-import-export-encryption"
     KEY_WRAP_PURPOSE = "vault-import-export-wrap"
 
-    def __init__(self, vault_service, key_manager, event_bus=None, key_exchange: KeyExchangeService | None = None):
+    def __init__(
+        self,
+        vault_service,
+        key_manager,
+        event_bus=None,
+        key_exchange: KeyExchangeService | None = None,
+        panic_checker: Callable[[], bool] | None = None,
+    ):
         self.vault_service = vault_service
         self.key_manager = key_manager
         self.event_bus = event_bus
         self.key_exchange = key_exchange
+        self.panic_checker = panic_checker
 
     def export_vault(
         self,
@@ -42,6 +50,7 @@ class VaultExporter:
         export_password: str | None = None,
         recipient_public_key: bytes | None = None,
     ) -> bytes:
+        self._ensure_not_panicking()
         handler = get_format_handler(fmt)
         entries = self._load_entries(entry_ids, include_fields=include_fields, exclude_fields=exclude_fields)
         metadata = {
@@ -77,6 +86,7 @@ class VaultExporter:
                 )
             return payload
         serialized = handler.serialize(entries, metadata=metadata if fmt in {"csv", "lastpass_csv"} else None)
+        self._ensure_not_panicking()
         payload_bytes = gzip.compress(serialized) if compress else serialized
         if not encrypt:
             return payload_bytes
@@ -114,6 +124,10 @@ class VaultExporter:
                 )
             )
         return payload
+
+    def _ensure_not_panicking(self) -> None:
+        if self.panic_checker is not None and self.panic_checker():
+            raise RuntimeError("export interrupted by panic mode")
 
     def _build_native_json_export(
         self,
@@ -255,16 +269,18 @@ class VaultExporter:
         if entry_ids:
             entries = []
             for entry_id in entry_ids:
+                self._ensure_not_panicking()
                 entry = self.vault_service.get_entry(entry_id)
                 if entry is None:
                     raise ValueError(f"entry {entry_id} not found")
                 entries.append(self._filter_fields(self._entry_to_dict(entry), include_fields, exclude_fields))
             return entries
 
-        return [
-            self._filter_fields(self._entry_to_dict(entry), include_fields, exclude_fields)
-            for entry in self.vault_service.get_all_entries()
-        ]
+        out = []
+        for entry in self.vault_service.get_all_entries():
+            self._ensure_not_panicking()
+            out.append(self._filter_fields(self._entry_to_dict(entry), include_fields, exclude_fields))
+        return out
 
     @staticmethod
     def _entry_to_dict(entry) -> dict[str, Any]:

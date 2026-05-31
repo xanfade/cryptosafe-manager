@@ -8,12 +8,15 @@ import json
 import re
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from src.core.crypto.key_derivation import PBKDF2Params, derive_encryption_key
 from src.core.import_export.formats import get_format_handler
 from src.core.import_export.key_exchange import KeyExchangeService
+from src.core.security.side_channel_protection import constant_time_compare_str
+from src.core.vault.entry_icon_service import EntryIconService
 from src.core.validators import clean_text, clean_url, validate_required
 
 
@@ -51,12 +54,15 @@ class VaultImporter:
         key_exchange: KeyExchangeService | None = None,
         max_file_size_bytes: int = 10 * 1024 * 1024,
         timeout_seconds: int = 30,
+        panic_checker: Callable[[], bool] | None = None,
     ):
         self.vault_service = vault_service
         self.key_manager = key_manager
         self.key_exchange = key_exchange
         self.max_file_size_bytes = max_file_size_bytes
         self.timeout_seconds = timeout_seconds
+        self.panic_checker = panic_checker
+        self.icon_service = EntryIconService(getattr(vault_service, "manager").db) if hasattr(vault_service, "manager") else None
 
     def import_package(
         self,
@@ -67,6 +73,7 @@ class VaultImporter:
         format_hint: str | None = None,
     ) -> ImportResult:
         started_at = time.monotonic()
+        self._ensure_not_panicking()
         raw_payload = payload if isinstance(payload, bytes) else payload.encode("utf-8")
         self._check_limits(raw_payload)
         entries = self._load_entries_from_payload(raw_payload, import_password=import_password, format_hint=format_hint)
@@ -98,6 +105,7 @@ class VaultImporter:
         updated_ids = []
         skipped_duplicates = 0
         for clean in sanitized_entries:
+            self._ensure_not_panicking()
             duplicate = self._match_existing(clean, existing_index=existing_index)
             if duplicate is not None and mode == "merge":
                 if duplicate_handling == "error":
@@ -112,6 +120,8 @@ class VaultImporter:
                 imported_ids.append(int(entry.id))
                 existing_index[self._entry_fingerprint(clean)] = entry
             self._check_timeout(started_at)
+        if self.icon_service is not None:
+            self.icon_service.update_from_entries(sanitized_entries)
         return self.ImportResult(
             mode=mode,
             duplicates=duplicates,
@@ -228,7 +238,7 @@ class VaultImporter:
             return get_format_handler(str(document.get("metadata", {}).get("content_format", "json"))).deserialize(payload_bytes)
 
         try:
-            if hashlib.sha256(plaintext).hexdigest() != integrity["hash"]:
+            if not constant_time_compare_str(hashlib.sha256(plaintext).hexdigest(), integrity["hash"]):
                 raise ValueError("native export integrity hash mismatch")
             if metadata.get("compressed"):
                 plaintext = gzip.decompress(plaintext)
@@ -277,10 +287,15 @@ class VaultImporter:
             raise ValueError("import package exceeds configured size limit")
 
     def _check_timeout(self, started_at: float) -> None:
+        self._ensure_not_panicking()
         if self.timeout_seconds <= 0:
             raise TimeoutError("import processing exceeded configured timeout")
         if time.monotonic() - started_at > self.timeout_seconds:
             raise TimeoutError("import processing exceeded configured timeout")
+
+    def _ensure_not_panicking(self) -> None:
+        if self.panic_checker is not None and self.panic_checker():
+            raise RuntimeError("import interrupted by panic mode")
 
     def _validate_encrypted_package(self, package: dict) -> None:
         metadata = package.get("metadata", {})
@@ -358,7 +373,7 @@ class VaultImporter:
             plaintext_buffer = bytearray(plaintext)
             integrity_hash = hashlib.sha256(bytes(plaintext_buffer)).hexdigest()
             expected_hash = package["metadata"]["integrity_hash"]
-            if integrity_hash != expected_hash:
+            if not constant_time_compare_str(integrity_hash, expected_hash):
                 raise ValueError("export integrity hash mismatch")
             expected_signature = hmac.new(bytes(export_key_buffer), integrity_hash.encode("utf-8"), hashlib.sha256).hexdigest()
             if not hmac.compare_digest(expected_signature, package["metadata"]["signature"]):

@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, x25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from src.core.security.side_channel_protection import constant_time_compare_str
 
 
 class KeyExchangeService:
@@ -237,7 +238,7 @@ class KeyExchangeService:
         contact = contacts.get(name)
         if not contact:
             return False
-        ok = contact["fingerprint"] == fingerprint
+        ok = constant_time_compare_str(str(contact["fingerprint"]), str(fingerprint))
         if ok:
             contact["verified"] = True
             self.db.set_setting(self.CONTACTS_SETTING, json.dumps(contacts, ensure_ascii=False))
