@@ -136,8 +136,24 @@ def apply_theme(root: tk.Tk):
 
     style.configure(
         "Vertical.TScrollbar",
-        background=COLORS["surface_2"],
-        troughcolor=COLORS["bg"],
-        bordercolor=COLORS["bg"],
-        arrowcolor=COLORS["muted"],
+        background="#7c3aed",
+        troughcolor="#1b1524",
+        bordercolor="#1b1524",
+        arrowcolor="#f7f2ff",
+        relief="flat",
+        borderwidth=0,
+        width=14,
+    )
+    style.map(
+        "Vertical.TScrollbar",
+        background=[("active", "#8b5cf6"), ("pressed", "#6d28d9")],
+    )
+    style.configure(
+        "Horizontal.TScrollbar",
+        background="#7c3aed",
+        troughcolor="#1b1524",
+        bordercolor="#1b1524",
+        arrowcolor="#f7f2ff",
+        relief="flat",
+        borderwidth=0,
     )
