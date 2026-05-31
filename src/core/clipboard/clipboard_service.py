@@ -14,7 +14,9 @@ from src.core.events import (
     ClipboardAutoCleared,
     ClipboardSuspiciousActivity,
     ClipboardCopyBlocked,
+    PanicModeActivated,
 )
+from src.core.clipboard.clipboard_settings import normalize_application_id
 
 
 class ClipboardDataType(str, Enum):
@@ -78,6 +80,14 @@ class ClipboardService:
         self._lock = threading.RLock()
         self._blocked = False
         self._suspicious_detected = False
+        self.allowed_applications_whitelist: set[str] = set()
+        self.security_level = "advanced"
+
+    def bind_panic_mode(self, event_bus) -> None:
+        event_bus.subscribe(PanicModeActivated, self._on_panic_mode_activated, async_=False)
+
+    def _on_panic_mode_activated(self, _event: PanicModeActivated) -> None:
+        self.clear(publish_event=True)
 
     def subscribe(self, observer: Callable[[str], None]) -> None:
         self._observers.append(observer)
@@ -334,6 +344,12 @@ class ClipboardService:
 
     def apply_settings(self, settings) -> None:
         self.set_clear_timeout(settings.auto_clear_timeout_sec)
+        self.allowed_applications_whitelist = {
+            normalize_application_id(item)
+            for item in getattr(settings, "allowed_applications_whitelist", [])
+            if normalize_application_id(item)
+        }
+        self.security_level = str(getattr(settings, "security_level", "advanced") or "advanced").lower()
 
     def load_timeout_from_settings(self, db) -> None:
         raw_value = db.get_setting("clipboard.clear_timeout_sec", "30")
@@ -363,6 +379,10 @@ class ClipboardService:
     def is_expected_value(self, value: str) -> bool:
         return self._clipboard_matches_expected(value)
 
+    def is_application_allowed(self, application_id: str | None) -> bool:
+        normalized = normalize_application_id(application_id or "")
+        return bool(normalized and normalized in self.allowed_applications_whitelist)
+
     def get_expected_value(self) -> str:
         return ""
 
@@ -377,6 +397,8 @@ class ClipboardService:
             self._notify("suspicious")
 
             self.clear()
+            if self.security_level == "paranoid":
+                self.block_future_copies()
 
     def block_future_copies(self) -> None:
         with self._lock:

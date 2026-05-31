@@ -33,6 +33,13 @@ class ClipboardMonitor:
             current = self.clipboard_service.adapter.get_text()
 
             if current and not self.clipboard_service.is_expected_value(current):
+                active_app = ""
+                try:
+                    active_app = self.clipboard_service.adapter.active_application_id()
+                except Exception:
+                    active_app = ""
+                if self.clipboard_service.is_application_allowed(active_app):
+                    continue
                 self.clipboard_service.report_suspicious_activity(
                     reason="clipboard_changed_outside_application"
                 )

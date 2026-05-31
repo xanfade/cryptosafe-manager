@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
@@ -19,7 +21,7 @@ class ClipboardSecurityLevel(str, Enum):
 
 CLIPBOARD_PRESETS = {
     ClipboardSecurityLevel.BASIC.value: {
-        "auto_clear_timeout_sec": 60,
+        "auto_clear_timeout_sec": None,
         "notifications_enabled": True,
         "security_level": ClipboardSecurityLevel.BASIC.value,
         "allowed_applications_whitelist": [],
@@ -41,7 +43,7 @@ CLIPBOARD_PRESETS = {
 
 @dataclass(slots=True)
 class ClipboardSettings:
-    auto_clear_timeout_sec: int | None = 30
+    auto_clear_timeout_sec: int | None = None
     notifications_enabled: bool = True
     security_level: str = ClipboardSecurityLevel.ADVANCED.value
     allowed_applications_whitelist: list[str] = field(default_factory=list)
@@ -69,9 +71,9 @@ class ClipboardSettings:
             notifications_enabled=bool(self.notifications_enabled),
             security_level=level,
             allowed_applications_whitelist=[
-                app.strip()
+                normalize_application_id(app)
                 for app in self.allowed_applications_whitelist
-                if app and app.strip()
+                if normalize_application_id(app)
             ],
         )
 
@@ -93,7 +95,7 @@ class ClipboardSettingsRepository:
             data = json.loads(decrypted_payload.decode("utf-8"))
 
             return ClipboardSettings(
-                auto_clear_timeout_sec=data.get("auto_clear_timeout_sec", 30),
+                auto_clear_timeout_sec=data.get("auto_clear_timeout_sec", None),
                 notifications_enabled=data.get("notifications_enabled", True),
                 security_level=data.get("security_level", "advanced"),
                 allowed_applications_whitelist=data.get(
@@ -124,3 +126,19 @@ class ClipboardSettingsRepository:
         )
 
         return settings
+
+
+def normalize_application_id(value: str) -> str:
+    text = str(value or "").strip().strip('"').strip("'")
+    if not text:
+        return ""
+
+    text = text.replace("\\", "/")
+    text = text.rstrip("/")
+    name = text.split("/")[-1]
+    if name.lower().endswith(".app"):
+        name = name[:-4]
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    name = re.sub(r"\s+", " ", name).strip().lower()
+    return os.path.splitext(name)[0] if "." in name and not name.startswith(".") else name

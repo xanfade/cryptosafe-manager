@@ -4,6 +4,7 @@ import importlib
 import platform
 import shutil
 import subprocess
+import ctypes
 from typing import Any
 
 
@@ -16,6 +17,9 @@ class ClipboardAdapter:
 
     def clear(self) -> None:
         raise NotImplementedError
+
+    def active_application_id(self) -> str:
+        return ""
 
 
 class WindowsClipboardAdapter(ClipboardAdapter):
@@ -55,6 +59,35 @@ class WindowsClipboardAdapter(ClipboardAdapter):
         finally:
             self.win32clipboard.CloseClipboard()
 
+    def active_application_id(self) -> str:
+        try:
+            win32gui: Any = importlib.import_module("win32gui")
+            win32process: Any = importlib.import_module("win32process")
+            hwnd = win32gui.GetForegroundWindow()
+            _thread_id, pid = win32process.GetWindowThreadProcessId(hwnd)
+            return self._process_name(pid)
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _process_name(pid: int) -> str:
+        try:
+            kernel32 = ctypes.windll.kernel32
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+            if not handle:
+                return ""
+            try:
+                size = ctypes.c_ulong(32768)
+                buffer = ctypes.create_unicode_buffer(size.value)
+                if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                    return buffer.value.split("\\")[-1]
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return ""
+        return ""
+
 
 class MacOSClipboardAdapter(ClipboardAdapter):
 
@@ -91,6 +124,14 @@ class MacOSClipboardAdapter(ClipboardAdapter):
 
     def clear(self) -> None:
         self._pasteboard().clearContents()
+
+    def active_application_id(self) -> str:
+        try:
+            appkit: Any = importlib.import_module("AppKit")
+            app = appkit.NSWorkspace.sharedWorkspace().frontmostApplication()
+            return str(app.localizedName() or app.bundleIdentifier() or "")
+        except Exception:
+            return ""
 
 
 class LinuxClipboardAdapter(ClipboardAdapter):
