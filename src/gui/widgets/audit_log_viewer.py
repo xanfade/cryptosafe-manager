@@ -16,7 +16,7 @@ class AuditLogViewer(tk.Toplevel):
     def __init__(self, master=None, db=None, signer=None):
         super().__init__(master)
         if not self._ensure_access(parent=master):
-            messagebox.showerror("Access denied", "Unlock the vault before viewing audit logs.", parent=master)
+            messagebox.showerror("Доступ запрещён", "Сначала разблокируй хранилище.", parent=master)
             self.destroy()
             return
 
@@ -30,9 +30,10 @@ class AuditLogViewer(tk.Toplevel):
         self.page = 0
         self.rows = []
 
-        self.title("Audit Log")
+        self.title("Журнал аудита")
         self.geometry("1100x700")
         self.minsize(900, 560)
+        self.configure(bg="#120d18")
 
         self.event_type_var = tk.StringVar()
         self.severity_var = tk.StringVar()
@@ -40,7 +41,7 @@ class AuditLogViewer(tk.Toplevel):
         self.date_from_var = tk.StringVar()
         self.date_to_var = tk.StringVar()
         self.search_var = tk.StringVar()
-        self.status_var = tk.StringVar(value="Integrity: not checked")
+        self.status_var = tk.StringVar(value="Целостность: не проверялась")
         self.stats_window_var = tk.StringVar(value="30")
         self.last_verification_report = None
 
@@ -49,6 +50,10 @@ class AuditLogViewer(tk.Toplevel):
         self.refresh_stats()
 
     def _build(self) -> None:
+        style = ttk.Style(self)
+        style.configure("Audit.Treeview", background="#1d1428", fieldbackground="#1d1428", foreground="#f7f2ff", rowheight=34)
+        style.configure("Audit.Treeview.Heading", background="#2b1b3d", foreground="#cdb8ff")
+        style.map("Audit.Treeview", background=[("selected", "#7c3aed")], foreground=[("selected", "#ffffff")])
         top = ttk.Frame(self, padding=8)
         top.pack(fill="x")
 
@@ -108,7 +113,7 @@ class AuditLogViewer(tk.Toplevel):
         middle.add(table_frame, weight=3)
 
         columns = ("seq", "timestamp", "event_type", "severity", "user_id", "source", "entry_id")
-        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=16)
+        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=16, style="Audit.Treeview")
         for col, label, width in [
             ("seq", "#", 70),
             ("timestamp", "Timestamp", 180),
