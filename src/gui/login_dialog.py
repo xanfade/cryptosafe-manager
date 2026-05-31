@@ -3,11 +3,12 @@ from tkinter import messagebox
 
 
 class LoginDialog(tk.Toplevel):
-    def __init__(self, parent, auth_service):
+    def __init__(self, parent, auth_service, secure_entry_mode: bool = False):
         super().__init__(parent)
         self.auth_service = auth_service
         self.result = False
         self.entered_password = ""
+        self.secure_entry_mode = bool(secure_entry_mode)
 
         self.title("Вход в CryptoSafe Manager")
         self.geometry("400x230")
@@ -23,6 +24,8 @@ class LoginDialog(tk.Toplevel):
         self.grab_set()
         self.focus_force()
         self.password.focus_set()
+        if self.secure_entry_mode:
+            self.attributes("-topmost", True)
 
     def _center_window(self, parent=None):
         self.update_idletasks()

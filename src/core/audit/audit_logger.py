@@ -32,6 +32,7 @@ from src.core.events import (
     EntryUpdated,
     LoginFailed,
     PanicModeActivated,
+    SecurityHardeningEvent,
     PasswordChanged,
     TotpAccessed,
     UserLoggedIn,
@@ -42,6 +43,7 @@ from src.core.events import (
     VaultUnlocked,
 )
 from src.database.db import Database
+from src.core.security.memory_guard import MemoryGuard
 
 
 class AuditSeverity(StrEnum):
@@ -80,6 +82,7 @@ class AuditLogger:
         self.db = db
         self.signer = signer
         self.config = config or {}
+        self.memory_guard = MemoryGuard(enable_locking=True, enable_auto_wipe=True)
         self._lock = threading.Lock()
         self._ensure_archive_schema()
         self._ensure_security_log_schema()
@@ -118,6 +121,7 @@ class AuditLogger:
             EntryShared: self.on_entry_shared,
             AuditDataImported: self.on_audit_data_imported,
             PanicModeActivated: self.on_panic_mode_activated,
+            SecurityHardeningEvent: self.on_security_hardening_event,
             TotpAccessed: self.on_totp_accessed,
         }
         critical_events = {
@@ -167,8 +171,10 @@ class AuditLogger:
                     "previous_hash": previous_hash,
                 }
                 entry_json = self._canonical_json(entry)
-                entry_hash = hashlib.sha256(entry_json).hexdigest()
-                signature = self.signer.sign(entry_json).hex()
+                with self.memory_guard.scoped_buffer(entry_json, critical=True) as protected_json:
+                    json_bytes = protected_json.to_bytes()
+                    entry_hash = hashlib.sha256(json_bytes).hexdigest()
+                    signature = self.signer.sign(json_bytes).hex()
                 public_key = self.signer.public_key_record()
 
                 conn.execute(
@@ -183,7 +189,7 @@ class AuditLogger:
                     (
                         sequence,
                         previous_hash,
-                        entry_json,
+                        json_bytes,
                         entry_hash,
                         signature,
                         self.signer.algorithm,
@@ -710,3 +716,7 @@ class AuditLogger:
 
     def on_totp_accessed(self, e: TotpAccessed):
         self.log_event("TOTP_ACCESSED", AuditSeverity.INFO, "totp", self._event_dict(e), entry_id=e.entry_id)
+
+    def on_security_hardening_event(self, e: SecurityHardeningEvent):
+        severity = AuditSeverity.WARN if e.status != "ok" else AuditSeverity.INFO
+        self.log_event("SECURITY_HARDENING_EVENT", severity, "security", self._event_dict(e), user_id="system")
