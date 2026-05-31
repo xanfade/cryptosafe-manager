@@ -3,10 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import secrets
+import time
 from dataclasses import dataclass, asdict
 
 from argon2.low_level import Type, hash_secret_raw
+from src.core.security.memory_guard import MemoryGuard
+from src.core.security.side_channel_protection import constant_time_compare
+from src.core.security.side_channel_protection import normalize_timing
+
+
+CRYPTO_MIN_DELAY_SEC = 0.002
+_MEM_GUARD = MemoryGuard()
 
 
 @dataclass
@@ -68,29 +75,43 @@ def generate_salt(length: int = 16) -> bytes:
 
 
 def derive_auth_hash(password: str, salt: bytes, params: Argon2Params) -> bytes:
+    started_at = time.perf_counter()
     params.validate()
-    return hash_secret_raw(
-        secret=password.encode("utf-8"),
-        salt=salt,
-        time_cost=params.time_cost,
-        memory_cost=params.memory_cost,
-        parallelism=params.parallelism,
-        hash_len=params.hash_len,
-        type=Type.ID,
-    )
+    pwd_bytes = bytearray(password.encode("utf-8"))
+    try:
+        with _MEM_GUARD.stack_canary():
+            return hash_secret_raw(
+                secret=bytes(pwd_bytes),
+                salt=salt,
+                time_cost=params.time_cost,
+                memory_cost=params.memory_cost,
+                parallelism=params.parallelism,
+                hash_len=params.hash_len,
+                type=Type.ID,
+            )
+    finally:
+        _MEM_GUARD.stack_scrub(pwd_bytes)
+        normalize_timing(started_at, CRYPTO_MIN_DELAY_SEC)
 
 
 def verify_auth_hash(password: str, salt: bytes, expected_hash: bytes, params: Argon2Params) -> bool:
     actual = derive_auth_hash(password, salt, params)
-    return secrets.compare_digest(actual, expected_hash)
+    return constant_time_compare(actual, expected_hash)
 
 
 def derive_encryption_key(password: str, salt: bytes, params: PBKDF2Params) -> bytes:
+    started_at = time.perf_counter()
     params.validate()
-    return hashlib.pbkdf2_hmac(
-        params.hash_name,
-        password.encode("utf-8"),
-        salt,
-        params.iterations,
-        dklen=params.dklen,
-    )
+    pwd_bytes = bytearray(password.encode("utf-8"))
+    try:
+        with _MEM_GUARD.stack_canary():
+            return hashlib.pbkdf2_hmac(
+                params.hash_name,
+                bytes(pwd_bytes),
+                salt,
+                params.iterations,
+                dklen=params.dklen,
+            )
+    finally:
+        _MEM_GUARD.stack_scrub(pwd_bytes)
+        normalize_timing(started_at, CRYPTO_MIN_DELAY_SEC)

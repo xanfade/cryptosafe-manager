@@ -4,6 +4,9 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+from src.core.security.memory_guard import MemoryGuard, SecureBuffer
+from src.core.crypto.memory import zeroize
+
 try:
     import keyring
 except Exception:
@@ -13,6 +16,7 @@ except Exception:
 @dataclass
 class CachedKey:
     value: bytearray
+    secure_value: SecureBuffer
     created_at: float
     last_access_at: float
 
@@ -23,15 +27,20 @@ class SecureKeyCache:
         ttl_seconds: int = 3600,
         clear_on_focus_loss: bool = True,
         clear_on_minimize: bool = True,
+        memory_guard: MemoryGuard | None = None,
     ):
         self.ttl_seconds = ttl_seconds
         self.clear_on_focus_loss = clear_on_focus_loss
         self.clear_on_minimize = clear_on_minimize
         self._entry: Optional[CachedKey] = None
+        self._memory_guard = memory_guard or MemoryGuard()
 
     def put(self, key: bytes) -> None:
+        self.clear()
         now = time.time()
-        self._entry = CachedKey(bytearray(key), now, now)
+        secure_buf = self._memory_guard.allocate(key, critical=True)
+        legacy_view = bytearray(key)
+        self._entry = CachedKey(legacy_view, secure_buf, now, now)
 
     def get(self) -> Optional[bytes]:
         if self._entry is None:
@@ -43,7 +52,7 @@ class SecureKeyCache:
             return None
 
         self._entry.last_access_at = now
-        return bytes(self._entry.value)
+        return self._entry.secure_value.to_bytes()
 
     def has_key(self) -> bool:
         return self.get() is not None
@@ -54,8 +63,8 @@ class SecureKeyCache:
 
     def clear(self) -> None:
         if self._entry is not None:
-            for i in range(len(self._entry.value)):
-                self._entry.value[i] = 0
+            zeroize(self._entry.value)
+            self._memory_guard.wipe(self._entry.secure_value, critical=True)
             self._entry = None
 
     def is_expired(self) -> bool:
