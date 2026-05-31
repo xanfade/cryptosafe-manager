@@ -1,11 +1,9 @@
 from __future__ import annotations
+
 import re
 import time
 
-from src.core.crypto.key_derivation import (
-    derive_encryption_key,
-    verify_auth_hash,
-)
+from src.core.crypto.key_derivation import derive_encryption_key, verify_auth_hash
 from src.core.events import (
     AppFocusGained,
     AppFocusLost,
@@ -14,9 +12,13 @@ from src.core.events import (
     AutoLocked,
     EventBus,
     LoginFailed,
+    PanicModeActivated,
     UserLoggedIn,
     UserLoggedOut,
 )
+from src.core.security.activity_monitor import ActivityMonitor
+from src.core.security.panic_mode import PanicMode
+from src.core.security.side_channel_protection import normalize_timing
 from src.core.state_manager import StateManager
 
 
@@ -51,10 +53,18 @@ class AuthenticationService:
         key_manager,
         state_manager: StateManager,
         event_bus: EventBus | None = None,
+        activity_monitor: ActivityMonitor | None = None,
+        panic_mode: PanicMode | None = None,
+        normalize_auth_timing_enabled: bool = False,
+        minimum_auth_delay_sec: float = 0.0,
     ):
         self.key_manager = key_manager
         self.state = state_manager
         self.event_bus = event_bus
+        self.activity_monitor = activity_monitor
+        self.panic_mode = panic_mode
+        self.normalize_auth_timing_enabled = bool(normalize_auth_timing_enabled)
+        self.minimum_auth_delay_sec = max(0.0, float(minimum_auth_delay_sec))
 
     def _delay_for_failures(self) -> int:
         n = self.state.session.failed_attempts
@@ -65,6 +75,7 @@ class AuthenticationService:
         return 30
 
     def login(self, password: str) -> bytes:
+        started_at = time.perf_counter()
         bundle = self.key_manager.load_bundle()
 
         ok = verify_auth_hash(
@@ -88,6 +99,8 @@ class AuthenticationService:
                 )
 
             time.sleep(delay)
+            if self.normalize_auth_timing_enabled:
+                normalize_timing(started_at, self.minimum_auth_delay_sec)
             raise ValueError("Неверный мастер-пароль")
 
         enc_key = derive_encryption_key(
@@ -98,10 +111,14 @@ class AuthenticationService:
 
         self.key_manager.cache_encryption_key(enc_key)
         self.state.unlock(user="local")
+        if self.activity_monitor:
+            self.activity_monitor.mark_activity()
 
         if self.event_bus:
             self.event_bus.publish(UserLoggedIn(user="local"))
 
+        if self.normalize_auth_timing_enabled:
+            normalize_timing(started_at, self.minimum_auth_delay_sec)
         return enc_key
 
     def logout(self) -> None:
@@ -122,11 +139,17 @@ class AuthenticationService:
     def touch(self) -> None:
         if self.is_unlocked():
             self.state.touch_activity()
+            if self.activity_monitor:
+                self.activity_monitor.mark_activity()
             self.key_manager.touch_cache()
 
     def should_auto_lock(self) -> bool:
+        if not self.verify_session_integrity():
+            return True
         if not self.is_unlocked():
             return False
+        if self.activity_monitor and self.activity_monitor.is_inactive():
+            return True
         if self.state.is_inactive():
             return True
         return self.key_manager.is_cache_expired()
@@ -140,7 +163,6 @@ class AuthenticationService:
     def on_app_focus_lost(self) -> None:
         if self.key_manager.cache.clear_on_focus_loss and self.is_unlocked():
             self.auto_lock("focus_lost")
-
         else:
             self.key_manager.on_app_focus_lost()
 
@@ -156,7 +178,6 @@ class AuthenticationService:
     def on_app_minimized(self) -> None:
         if self.key_manager.cache.clear_on_minimize and self.is_unlocked():
             self.auto_lock("app_minimized")
-
         else:
             self.key_manager.on_app_minimized()
 
@@ -171,3 +192,19 @@ class AuthenticationService:
 
     def is_unlocked(self) -> bool:
         return self.state.is_unlocked() and self.key_manager.has_cached_key()
+
+    def verify_session_integrity(self) -> bool:
+        state_unlocked = self.state.is_unlocked()
+        cache_present = self.key_manager.has_cached_key()
+        return state_unlocked == cache_present
+
+    def activate_panic_mode(self, clear_clipboard_callback=None, reason: str = "manual") -> bool:
+        if not self.panic_mode:
+            return False
+        activated = self.panic_mode.activate(
+            lock_callback=lambda: self.auto_lock("panic_mode"),
+            clear_clipboard_callback=clear_clipboard_callback,
+        )
+        if activated and self.event_bus:
+            self.event_bus.publish(PanicModeActivated(reason=reason))
+        return activated

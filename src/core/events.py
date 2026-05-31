@@ -170,6 +170,13 @@ class NetworkShareRequested:
 class PanicModeActivated:
     reason: str = "manual"
 
+@dataclass
+class SecurityHardeningEvent:
+    action: str
+    profile: str = "standard"
+    status: str = "ok"
+    details: str = ""
+
 
 @dataclass
 class TotpAccessed:

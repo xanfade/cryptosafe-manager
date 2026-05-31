@@ -9,6 +9,14 @@ from src.core.config import ConfigManager
 from src.core.events import EventBus
 from src.core.key_manager import KeyManager
 from src.core.crypto.authentication import AuthenticationService
+from src.core.security import (
+    ActivityMonitor,
+    MemoryGuard,
+    PanicMode,
+    PlatformSecurityManager,
+    SecurityHardeningSettings,
+    SecurityProfileManager,
+)
 from src.core.settings_repo import SettingsService
 from src.core.state_manager import StateManager
 from src.database.db import Database
@@ -66,20 +74,77 @@ def main():
     fernet_key = SettingsService.build_fernet_key(raw_settings_key)
     settings_service = SettingsService(db, fernet_key)
 
-    timeout_raw = settings_service.get("security.auto_lock_timeout_sec", "900")
-    try:
-        state_manager.set_inactivity_timeout(int(timeout_raw))
-    except (TypeError, ValueError):
-        state_manager.set_inactivity_timeout(900)
+    hardening = SecurityHardeningSettings.from_settings(settings_service)
+    for key, value in hardening.as_setting_pairs().items():
+        if settings_service.get(key) is None:
+            settings_service.set(key, value, encrypted=False)
+    profile_manager = SecurityProfileManager(settings_service, event_bus=event_bus)
+    if settings_service.get(SecurityProfileManager.ACTIVE_PROFILE_KEY) is None:
+        settings_service.set(SecurityProfileManager.ACTIVE_PROFILE_KEY, "standard", encrypted=False)
+
+    hardening = SecurityHardeningSettings.from_settings(settings_service)
+    errors, _warnings = hardening.validate()
+    if errors:
+        migration = profile_manager.apply_profile("paranoid")
+        if not migration.success:
+            raise ValueError(f"Invalid security configuration and failed to recover: {'; '.join(migration.errors)}")
+        hardening = SecurityHardeningSettings.from_settings(settings_service)
+
+    if settings_service.get("ui.tray.start_minimized") is None:
+        settings_service.set("ui.tray.start_minimized", "false", encrypted=False)
+    if settings_service.get("security.platform.strict") is None:
+        settings_service.set("security.platform.strict", "true", encrypted=False)
+
+    # Keep the legacy key for backward compatibility with existing deployments.
+    if settings_service.get("security.auto_lock_timeout_sec") is None:
+        settings_service.set("security.auto_lock_timeout_sec", str(hardening.auto_lock_timeout_sec), encrypted=False)
+
+    strict_platform = str(settings_service.get("security.platform.strict", "true")).strip().lower() in {"1", "true", "yes", "on"}
+    platform_security = PlatformSecurityManager(strict=strict_platform)
+    platform_warnings = platform_security.enforce()
+
+    state_manager.set_inactivity_timeout(hardening.auto_lock_timeout_sec)
+    activity_monitor = ActivityMonitor(
+        enabled=hardening.enabled and hardening.activity_monitor_enabled,
+        auto_lock_timeout_sec=hardening.auto_lock_timeout_sec,
+        sensitivity=hardening.activity_sensitivity,
+        device_type=hardening.activity_device_type,
+    )
+    _memory_guard = MemoryGuard(
+        enable_locking=hardening.enabled and hardening.memory_locking,
+        enable_auto_wipe=hardening.enabled and hardening.memory_auto_wipe,
+    )
+    panic_mode = PanicMode(
+        enabled=hardening.enabled and hardening.panic_mode_enabled,
+        lock_on_activate=hardening.panic_lock_on_activate,
+        clear_clipboard_on_activate=hardening.panic_clear_clipboard_on_activate,
+        close_windows_on_activate=hardening.panic_close_windows_on_activate,
+        close_app_on_activate=hardening.panic_close_app_on_activate,
+        stealth_fake_error=hardening.panic_stealth_fake_error,
+        stealth_decoy_command=hardening.panic_stealth_decoy_command,
+        stealth_redirect_url=hardening.panic_stealth_redirect_url,
+    )
 
     auth_service = AuthenticationService(
         key_manager=key_manager,
         state_manager=state_manager,
         event_bus=event_bus,
+        activity_monitor=activity_monitor,
+        panic_mode=panic_mode,
+        normalize_auth_timing_enabled=hardening.enabled and hardening.normalize_auth_timing,
+        minimum_auth_delay_sec=hardening.minimum_auth_delay_sec,
     )
+    auth_service.memory_guard = _memory_guard
 
     if key_manager.is_initialized():
-        login = LoginDialog(root, auth_service)
+        login = LoginDialog(
+            root,
+            auth_service,
+            secure_entry_mode=(
+                platform_security.capabilities.platform_name == "Windows"
+                and platform_security.capabilities.secure_desktop
+            ),
+        )
         root.wait_window(login)
 
         if not getattr(login, "result", None):
@@ -103,7 +168,7 @@ def main():
         "SYSTEM_STARTUP",
         "INFO",
         "application",
-        {"message": "Application started"},
+        {"message": "Application started", "platform_warnings": platform_warnings},
         user_id="system",
     )
 
@@ -119,6 +184,7 @@ def main():
         auth_service=auth_service,
         event_bus=event_bus,
         audit_logger=audit_logger,
+        start_minimized_to_tray=str(settings_service.get("ui.tray.start_minimized", "false")).lower() in {"1", "true", "yes", "on"},
     )
     app.mainloop()
 
