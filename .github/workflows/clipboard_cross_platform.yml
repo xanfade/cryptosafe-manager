@@ -39,7 +39,7 @@ jobs:
 
       - name: Run clipboard validation tests
         run: |
-          python -m pytest tests/test_for_4sprint/test_clipboard_validation.py -q
+          python -m pytest tests/test_for_4sprint/test_clipboard_validation.py -q --no-cov
 
   linux-distributions:
     name: Clipboard tests on ${{ matrix.image }}
@@ -71,7 +71,7 @@ jobs:
 
       - name: Run clipboard validation tests
         run: |
-          python -m pytest tests/test_for_4sprint/test_clipboard_validation.py -q
+          python -m pytest tests/test_for_4sprint/test_clipboard_validation.py -q --no-cov
 
   memory-security-linux:
     name: TEST-3 memory dump test on Linux
@@ -98,4 +98,4 @@ jobs:
 
       - name: Run TEST-3 memory security test
         run: |
-          python -m pytest tests/test_for_4sprint/test_clipboard_memory_security.py -q
+          python -m pytest tests/test_for_4sprint/test_clipboard_memory_security.py -q --no-cov
