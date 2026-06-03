@@ -97,8 +97,27 @@ class PasswordChangeDialog(tk.Toplevel):
         )
 
     def _build_ui(self):
+        canvas = tk.Canvas(self, bg=self.BG, highlightthickness=0, bd=0)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar = tk.Scrollbar(
+            self,
+            orient="vertical",
+            command=canvas.yview,
+            bg="#7c3aed",
+            troughcolor="#1b1524",
+            activebackground="#8b5cf6",
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+            width=14,
+        )
+        scrollbar.pack(side="right", fill="y")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
         outer = tk.Frame(self, bg=self.BG, padx=24, pady=24)
-        outer.pack(fill="both", expand=True)
+        canvas_window = canvas.create_window((0, 0), window=outer, anchor="nw")
+        outer.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(canvas_window, width=event.width))
 
         card = tk.Frame(
             outer,

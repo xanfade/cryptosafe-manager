@@ -3,6 +3,7 @@ import difflib
 import hashlib
 import shlex
 import time
+import threading
 import webbrowser
 import subprocess
 import logging
@@ -23,10 +24,26 @@ from dataclasses import dataclass
 from tkinter import messagebox, simpledialog
 from src.gui.theme import apply_theme, COLORS, FONTS
 from src.core.clipboard.clipboard_settings import ClipboardSettingsRepository
-from src.core.events import AppShutdown, VaultUnlocked
+from src.core.events import (
+    AppShutdown,
+    VaultUnlocked,
+    AutoLocked,
+    ClipboardCopyBlocked,
+    ClipboardSuspiciousActivity,
+    LoginFailed,
+    PanicModeActivated,
+)
 from src.core.events import VaultSearchPerformed
 from src.gui.widgets.clipboard_settings_dialog import ClipboardSettingsDialog
 from src.gui.tray_manager import TrayController
+from src.core.security.profile_manager import (
+    SecurityProfileManager,
+    PROFILE_STANDARD,
+    PROFILE_ENHANCED,
+    PROFILE_PARANOID,
+    build_profile,
+)
+from src.core.security.hardening_config import SecurityHardeningSettings
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +61,7 @@ class MainWindow(tk.Tk):
         auth_service=None,
         event_bus=None,
         audit_logger=None,
+        settings_service=None,
         start_minimized_to_tray: bool = False,
     ):
         super().__init__()
@@ -56,10 +74,13 @@ class MainWindow(tk.Tk):
         self.key_manager = key_manager
         self.auth_service = auth_service
         self.audit_logger = audit_logger
+        self.settings_service = settings_service
         self.start_minimized_to_tray = bool(start_minimized_to_tray)
         self._pre_minimize_geometry = None
         self._pre_minimize_state = "normal"
         self._is_tray_hidden = False
+        self._is_closing = False
+        self._child_windows: dict[str, tk.Toplevel] = {}
 
         self.clipboard_settings_repository = ClipboardSettingsRepository(
             db=self.db,
@@ -107,6 +128,7 @@ class MainWindow(tk.Tk):
         self._is_minimized = False
         self._has_focus = True
         self._focus_out_job = None
+        self._ignore_focus_loss_until = 0.0
         self._poll_job = None
         self._audit_verification_job = None
         self._lock_overlay = None
@@ -118,6 +140,7 @@ class MainWindow(tk.Tk):
         self._lazy_chunk_size = 120
         self._lazy_total = 0
         self.audit_integrity_status = "not checked"
+        self._hardware_token_job = None
 
         self.title("CryptoSafe Manager")
         self.geometry("1450x850")
@@ -138,11 +161,12 @@ class MainWindow(tk.Tk):
         self.create_statusbar()
         self._setup_tray()
 
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.protocol("WM_DELETE_WINDOW", self.confirm_and_close)
 
         self._bind_auth_integration()
         self._bind_global_shortcuts()
-        self.after(1000, self._poll_session_state)
+        self._poll_job = self.after(1000, self._poll_session_state)
+        self._schedule_hardware_token_poll()
         self._schedule_periodic_audit_verification(initial_delay_ms=2000)
 
         if self.auth_service and not self.auth_service.is_unlocked():
@@ -154,9 +178,19 @@ class MainWindow(tk.Tk):
             self.after(200, self.hide_to_tray)
 
     def _setup_tray(self):
+        def _safe_run_on_ui(fn):
+            if self._is_closing:
+                return
+            try:
+                if not self.winfo_exists():
+                    return
+                self.after(0, fn)
+            except Exception:
+                pass
+
         self.tray = TrayController(
             title="CryptoSafe Manager",
-            run_on_ui=lambda fn: self.after(0, fn),
+            run_on_ui=_safe_run_on_ui,
             on_show=self.show_from_tray,
             on_lock=self.lock_vault,
             on_unlock=self.unlock_vault,
@@ -167,6 +201,19 @@ class MainWindow(tk.Tk):
             on_exit=self.on_close,
         )
         self.tray.start()
+        if self.tray and self.tray.enabled:
+            settings = self.clipboard_settings_repository.get()
+            self.tray.set_security_level(getattr(settings, "security_level", "advanced"))
+        self._bind_tray_security_notifications()
+
+    def _bind_tray_security_notifications(self):
+        if not self.event_bus or not self.tray or not self.tray.enabled:
+            return
+        self.event_bus.subscribe(ClipboardSuspiciousActivity, lambda _e: self.tray.notify("CryptoSafe", "Подозрительная активность буфера"))
+        self.event_bus.subscribe(ClipboardCopyBlocked, lambda _e: self.tray.notify("CryptoSafe", "Копирование в буфер заблокировано"))
+        self.event_bus.subscribe(AutoLocked, lambda _e: self.tray.notify("CryptoSafe", "Хранилище автоматически заблокировано"))
+        self.event_bus.subscribe(PanicModeActivated, lambda _e: self.tray.notify("CryptoSafe", "Активирован режим паники"))
+        self.event_bus.subscribe(LoginFailed, lambda _e: self.tray.notify("CryptoSafe", "Неудачная попытка входа"))
 
     def hide_to_tray(self):
         self.update_idletasks()
@@ -175,7 +222,7 @@ class MainWindow(tk.Tk):
         self.withdraw()
         self._is_tray_hidden = True
         if self.tray and self.tray.enabled:
-            self.tray.notify("CryptoSafe", "Application is running in tray")
+            self.tray.notify("CryptoSafe", "Приложение работает в строке меню")
 
     def show_from_tray(self):
         self.deiconify()
@@ -191,7 +238,7 @@ class MainWindow(tk.Tk):
 
     def quick_search_from_tray(self):
         self.show_from_tray()
-        query = simpledialog.askstring("Quick Search", "Find entry:", parent=self)
+        query = simpledialog.askstring("Быстрый поиск", "Найти запись:", parent=self)
         if not query:
             return
         self.search_var.set(query)
@@ -217,10 +264,20 @@ class MainWindow(tk.Tk):
             return
         self._panic_in_progress = True
         try:
+            selected_entry_id = None
+            try:
+                if hasattr(self, "table") and hasattr(self.table, "tree"):
+                    focused = self.table.tree.focus()
+                    if focused:
+                        selected_entry_id = str(focused)
+            except Exception:
+                selected_entry_id = None
+
             self._panic_snapshot = {
                 "search_query": self.search_var.get() if hasattr(self, "search_var") else "",
                 "geometry": self.geometry(),
                 "state": self.state(),
+                "selected_entry_id": selected_entry_id,
             }
             close_app = str(self.db.get_setting("security.hardening.panic_mode.close_app", "false")).lower() in {"1", "true", "yes", "on"}
             fake_error = str(self.db.get_setting("security.hardening.panic_mode.stealth.fake_error", "false")).lower() in {"1", "true", "yes", "on"}
@@ -247,7 +304,7 @@ class MainWindow(tk.Tk):
                 if close_app:
                     self.on_close()
                 elif self.tray and self.tray.enabled:
-                    self.tray.notify("CryptoSafe", "Panic mode activated")
+                    self.tray.notify("CryptoSafe", "Активирован режим паники")
         finally:
             self._panic_in_progress = False
 
@@ -262,7 +319,7 @@ class MainWindow(tk.Tk):
     def _run_panic_stealth(self, fake_error: bool, decoy_command: str, redirect_url: str):
         if fake_error:
             try:
-                messagebox.showerror("System Error", "Unexpected application error occurred.")
+                messagebox.showerror("Системная ошибка", "Произошла непредвиденная ошибка приложения.")
             except Exception:
                 pass
         if decoy_command:
@@ -338,12 +395,35 @@ class MainWindow(tk.Tk):
 
         style.configure(
             "Vertical.TScrollbar",
-            background="#242426",
-            troughcolor="#121212",
-            bordercolor="#121212",
-            arrowcolor="#a1a1aa",
+            background="#7c3aed",
+            troughcolor="#1b1524",
+            bordercolor="#1b1524",
+            arrowcolor="#f3e8ff",
+            darkcolor="#7c3aed",
+            lightcolor="#8b5cf6",
+            gripcount=0,
             relief="flat",
             borderwidth=0,
+        )
+        style.map(
+            "Vertical.TScrollbar",
+            background=[("active", "#8b5cf6")]
+        )
+        style.configure(
+            "Horizontal.TScrollbar",
+            background="#7c3aed",
+            troughcolor="#1b1524",
+            bordercolor="#1b1524",
+            arrowcolor="#f3e8ff",
+            darkcolor="#7c3aed",
+            lightcolor="#8b5cf6",
+            gripcount=0,
+            relief="flat",
+            borderwidth=0,
+        )
+        style.map(
+            "Horizontal.TScrollbar",
+            background=[("active", "#8b5cf6")]
         )
 
     def create_layout(self):
@@ -394,37 +474,23 @@ class MainWindow(tk.Tk):
         )
         self.sidebar_vault_btn.pack(fill="x", pady=3)
 
-        self.sidebar_add_btn = self._make_sidebar_canvas_button(
-            nav_frame,
-            "➕  Добавить запись",
-            self.add_record
-        )
-        self.sidebar_add_btn.pack(fill="x", pady=3)
-
-        self.sidebar_clipboard_btn = self._make_sidebar_canvas_button(
-            nav_frame,
-            "📋  Буфер обмена",
-            self.show_clipboard_preview
-        )
-        self.sidebar_clipboard_btn.pack(fill="x", pady=3)
-
         self.sidebar_logs_btn = self._make_sidebar_canvas_button(
             nav_frame,
             "📑  Журнал событий",
-            lambda: AuditLogViewer(self, db=self.db, signer=getattr(self.audit_logger, "signer", None))
+            self.open_audit_log
         )
         self.sidebar_logs_btn.pack(fill="x", pady=3)
 
         self.sidebar_qr_btn = self._make_sidebar_canvas_button(
             nav_frame,
-            "📷  QR Exchange",
+            "📷  QR Обмен",
             self.open_qr_exchange
         )
         self.sidebar_qr_btn.pack(fill="x", pady=3)
 
         self.sidebar_import_export_btn = self._make_sidebar_canvas_button(
             nav_frame,
-            "⇄  Import / Export",
+            "⇄  Импорт / Экспорт",
             self.open_import_export_dialog
         )
         self.sidebar_import_export_btn.pack(fill="x", pady=3)
@@ -586,33 +652,43 @@ class MainWindow(tk.Tk):
 
         search_panel = tk.Frame(
             self.header,
-            bg="#1c1c1e",
+            bg="#1a1622",
             highlightthickness=1,
-            highlightbackground="#2d2d30"
+            highlightbackground="#4c1d95"
         )
         search_panel.pack(side="right", padx=30, pady=26)
 
         tk.Label(
             search_panel,
             text="⌕",
-            bg="#1c1c1e",
-            fg="#a1a1aa",
-            font=("Arial", 13)
+            bg="#1a1622",
+            fg="#c4b5fd",
+            font=("Arial", 14, "bold")
         ).pack(side="left", padx=(12, 6))
 
         self.search_entry = tk.Entry(
             search_panel,
             textvariable=self.search_var,
-            bg="#1c1c1e",
+            bg="#1a1622",
             fg="#ffffff",
             insertbackground="#ffffff",
             relief="flat",
             bd=0,
             font=("Arial", 11),
-            width=32
+            width=30
         )
-        self.search_entry.pack(side="left", ipady=9, padx=(0, 12))
+        self.search_entry.pack(side="left", ipady=9, padx=(0, 8))
         self.search_entry.configure(takefocus=True)
+
+        clear_search_btn = self._make_canvas_button(
+            search_panel,
+            "✕",
+            lambda: self.search_var.set(""),
+            width=32,
+            height=28,
+            canvas_bg="#1a1622",
+        )
+        clear_search_btn.pack(side="right", padx=(0, 8), pady=6)
 
     def create_menu(self):
         menubar = tk.Menu(
@@ -655,6 +731,10 @@ class MainWindow(tk.Tk):
             label="Настройки буфера обмена",
             command=self.open_clipboard_settings,
         )
+        security_menu.add_command(
+            label="Профили безопасности",
+            command=self.open_security_profiles_dialog,
+        )
 
         security_menu.add_separator()
 
@@ -671,14 +751,14 @@ class MainWindow(tk.Tk):
         )
         view_menu.add_command(
             label="Logs",
-            command=lambda: AuditLogViewer(self, db=self.db, signer=getattr(self.audit_logger, "signer", None)),
+            command=self.open_audit_log,
         )
         view_menu.add_command(
-            label="QR Exchange",
+            label="QR Обмен",
             command=self.open_qr_exchange,
         )
         view_menu.add_command(
-            label="Import / Export",
+            label="Импорт / Экспорт",
             command=self.open_import_export_dialog,
         )
         view_menu.add_command(
@@ -692,6 +772,7 @@ class MainWindow(tk.Tk):
             bg="#2b2b2b", fg="#ffffff",
             activebackground="#3a3a3a", activeforeground="#ffffff"
         )
+        help_menu.add_command(label="Горячие клавиши", command=self.show_hotkeys_help)
         help_menu.add_command(label="About")
         menubar.add_cascade(label="Help", menu=help_menu)
 
@@ -756,16 +837,7 @@ class MainWindow(tk.Tk):
             width=135,
             height=38
         )
-        self.btn_clear_search.pack(side="right")
-
-        self.btn_lock = self._make_canvas_button(
-            right,
-            "Заблокировать",
-            self.toggle_lock_state,
-            width=145,
-            height=38
-        )
-        self.btn_lock.pack(side="right", padx=(0, 10))
+        self.btn_clear_search.pack(side="right", padx=(0, 10))
 
         self.btn_unlock = self._make_canvas_button(
             right,
@@ -1267,13 +1339,15 @@ class MainWindow(tk.Tk):
         return ratio >= 0.72
 
     def open_password_change_dialog(self):
-        dialog = PasswordChangeDialog(
-            self,
-            db=self.db,
-            key_manager=self.key_manager,
-            auth_service=self.auth_service,
+        self._open_singleton_window(
+            "password_change",
+            lambda: PasswordChangeDialog(
+                self,
+                db=self.db,
+                key_manager=self.key_manager,
+                auth_service=self.auth_service,
+            ),
         )
-        self.wait_window(dialog)
 
     def open_clipboard_settings(self):
         if self.locked:
@@ -1284,21 +1358,323 @@ class MainWindow(tk.Tk):
             )
             return
 
-        dialog = ClipboardSettingsDialog(
-            self,
-            repository=self.clipboard_settings_repository,
-            clipboard_service=self.clipboard_service,
+        dialog = self._open_singleton_window(
+            "clipboard_settings",
+            lambda: ClipboardSettingsDialog(
+                self,
+                repository=self.clipboard_settings_repository,
+                clipboard_service=self.clipboard_service,
+            ),
         )
 
+        if not dialog:
+            return
         self.wait_window(dialog)
 
         if dialog.result:
             timeout = dialog.result.auto_clear_timeout_sec
+            if self.tray and self.tray.enabled:
+                self.tray.set_security_level(getattr(dialog.result, "security_level", "advanced"))
 
             if timeout is None:
                 self.set_status("Настройки буфера сохранены: автоочистка отключена")
             else:
                 self.set_status(f"Настройки буфера сохранены: автоочистка {timeout} сек.")
+
+    def _format_profile_name(self, profile: str) -> str:
+        mapping = {
+            PROFILE_STANDARD: "Стандартный",
+            PROFILE_ENHANCED: "Расширенный",
+            PROFILE_PARANOID: "Параноик",
+        }
+        return mapping.get(str(profile or "").strip().lower(), "Стандартный")
+
+    def _apply_hardening_runtime(self, cfg: SecurityHardeningSettings):
+        if self.auth_service:
+            self.auth_service.normalize_auth_timing_enabled = bool(cfg.normalize_auth_timing)
+            self.auth_service.minimum_auth_delay_sec = max(0.0, float(cfg.minimum_auth_delay_sec))
+
+            if getattr(self.auth_service, "activity_monitor", None):
+                monitor = self.auth_service.activity_monitor
+                monitor.enabled = bool(cfg.enabled and cfg.activity_monitor_enabled)
+                monitor.auto_lock_timeout_sec = int(cfg.auto_lock_timeout_sec)
+                monitor.sensitivity = str(cfg.activity_sensitivity)
+                monitor.device_type = str(cfg.activity_device_type)
+
+            if getattr(self.auth_service, "panic_mode", None):
+                panic = self.auth_service.panic_mode
+                panic.enabled = bool(cfg.enabled and cfg.panic_mode_enabled)
+                panic.lock_on_activate = bool(cfg.panic_lock_on_activate)
+                panic.clear_clipboard_on_activate = bool(cfg.panic_clear_clipboard_on_activate)
+                panic.close_windows_on_activate = bool(cfg.panic_close_windows_on_activate)
+                panic.close_app_on_activate = bool(cfg.panic_close_app_on_activate)
+                panic.stealth_fake_error = bool(cfg.panic_stealth_fake_error)
+                panic.stealth_decoy_command = str(cfg.panic_stealth_decoy_command or "")
+                panic.stealth_redirect_url = str(cfg.panic_stealth_redirect_url or "")
+
+        if self.auth_service and getattr(self.auth_service, "state", None):
+            self.auth_service.state.set_inactivity_timeout(int(cfg.auto_lock_timeout_sec))
+
+    def open_security_profiles_dialog(self):
+        if not self.settings_service:
+            messagebox.showerror(
+                "Профили безопасности",
+                "Сервис настроек недоступен.",
+                parent=self,
+            )
+            return
+        existing = self._get_open_child_window("security_profiles")
+        if existing:
+            self._focus_child_window(existing)
+            return
+
+        manager = SecurityProfileManager(self.settings_service, event_bus=self.event_bus)
+        current = manager.get_active_profile()
+
+        dialog = tk.Toplevel(self)
+        self._register_child_window("security_profiles", dialog)
+        dialog.title("Профили безопасности")
+        dialog.configure(bg="#16141d")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry("760x560")
+        dialog.minsize(700, 500)
+
+        container = tk.Frame(dialog, bg="#16141d", padx=18, pady=16)
+        container.pack(fill="both", expand=True)
+        container.grid_rowconfigure(3, weight=1)
+        container.grid_columnconfigure(0, weight=1)
+
+        tk.Label(
+            container,
+            text="Профили безопасности",
+            bg="#16141d",
+            fg="#f5f3ff",
+            font=("Arial", 16, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+
+        selector_row = tk.Frame(container, bg="#16141d")
+        selector_row.grid(row=1, column=0, sticky="ew", pady=(12, 10))
+        selector_row.grid_columnconfigure(1, weight=1)
+
+        tk.Label(
+            selector_row,
+            text="Профиль:",
+            bg="#16141d",
+            fg="#c4b5fd",
+            font=("Arial", 11),
+        ).grid(row=0, column=0, sticky="w", padx=(0, 10))
+
+        profile_var = tk.StringVar(value=self._format_profile_name(current))
+        profile_map = {
+            "Стандартный": PROFILE_STANDARD,
+            "Расширенный": PROFILE_ENHANCED,
+            "Параноик": PROFILE_PARANOID,
+        }
+
+        profile_combo = ttk.Combobox(
+            selector_row,
+            state="readonly",
+            values=list(profile_map.keys()),
+            textvariable=profile_var,
+        )
+        profile_combo.grid(row=0, column=1, sticky="ew")
+
+        info = tk.Label(
+            container,
+            text=f"Текущий профиль: {self._format_profile_name(current)}",
+            bg="#16141d",
+            fg="#a78bfa",
+            font=("Arial", 10),
+        )
+        info.grid(row=2, column=0, sticky="w")
+
+        preview_frame = tk.Frame(container, bg="#16141d")
+        preview_frame.grid(row=3, column=0, sticky="nsew", pady=(12, 0))
+        preview_frame.grid_rowconfigure(0, weight=1)
+        preview_frame.grid_columnconfigure(0, weight=1)
+
+        preview_text = tk.Text(
+            preview_frame,
+            bg="#1f1830",
+            fg="#efe9ff",
+            insertbackground="#efe9ff",
+            relief="flat",
+            bd=0,
+            wrap="word",
+            font=("Consolas", 10),
+            padx=12,
+            pady=12,
+        )
+        preview_text.grid(row=0, column=0, sticky="nsew")
+        preview_scroll = ttk.Scrollbar(
+            preview_frame,
+            orient="vertical",
+            style="Vertical.TScrollbar",
+            command=preview_text.yview,
+        )
+        preview_scroll.grid(row=0, column=1, sticky="ns")
+        preview_text.configure(yscrollcommand=preview_scroll.set)
+
+        btn_row = tk.Frame(container, bg="#16141d")
+        btn_row.grid(row=4, column=0, sticky="ew", pady=(14, 0))
+
+        def _render_preview():
+            labels = {
+                "security.hardening.minimum_auth_delay_sec": "Минимальная задержка при входе",
+                "security.hardening.activity_monitor.auto_lock_timeout_sec": "Таймаут автоблокировки",
+                "security.hardening.activity_monitor.sensitivity": "Чувствительность мониторинга активности",
+                "security.hardening.panic_mode.close_app": "Закрывать приложение при panic mode",
+                "security.hardening.panic_mode.stealth.fake_error": "Показывать ложную системную ошибку",
+                "security.hardening.memory_guard.lock_memory": "Блокировка памяти",
+                "security.hardening.memory_guard.auto_wipe": "Автоочистка памяти",
+                "security.hardening.normalize_auth_timing": "Выравнивание времени проверки входа",
+                "security.profile.active": "Активный профиль безопасности",
+            }
+
+            def _fmt_value(key: str, value: str) -> str:
+                normalized = str(value).strip().lower()
+                if normalized in {"true", "false"}:
+                    return "Вкл" if normalized == "true" else "Выкл"
+                if key.endswith("auto_lock_timeout_sec"):
+                    try:
+                        sec = int(value)
+                        if sec < 60:
+                            return f"{sec} сек"
+                        mins = sec // 60
+                        rest = sec % 60
+                        return f"{mins} мин {rest} сек" if rest else f"{mins} мин"
+                    except Exception:
+                        return str(value)
+                if key.endswith("minimum_auth_delay_sec"):
+                    try:
+                        return f"{float(value):.2f} сек"
+                    except Exception:
+                        return str(value)
+                map_values = {
+                    "low": "Низкая",
+                    "medium": "Средняя",
+                    "high": "Высокая",
+                    PROFILE_STANDARD: "Стандартный",
+                    PROFILE_ENHANCED: "Расширенный",
+                    PROFILE_PARANOID: "Параноик",
+                }
+                return map_values.get(str(value).strip().lower(), str(value))
+
+            selected_name = profile_var.get()
+            target = profile_map[selected_name]
+            changes = manager.preview_profile_change(target)
+            cfg = SecurityHardeningSettings.from_settings(self.settings_service)
+            errors, warnings = cfg.validate()
+            target_cfg = build_profile(target)
+            target_errors, target_warnings = target_cfg.validate()
+            preview_text.configure(state="normal")
+            preview_text.delete("1.0", "end")
+            preview_text.insert("end", f"Целевой профиль: {selected_name}\n\n")
+            if changes:
+                preview_text.insert("end", "Что изменится:\n")
+                for item in changes:
+                    key = item["key"]
+                    title = labels.get(key, key)
+                    old_value = _fmt_value(key, item["from"])
+                    new_value = _fmt_value(key, item["to"])
+                    preview_text.insert("end", f"- {title}: {old_value} -> {new_value}\n")
+            else:
+                preview_text.insert("end", "Изменений нет.\n")
+
+            if warnings:
+                preview_text.insert("end", "\nТекущие предупреждения:\n")
+                for w in warnings:
+                    preview_text.insert("end", f"- {w}\n")
+            if errors:
+                preview_text.insert("end", "\nТекущие ошибки конфигурации:\n")
+                for e in errors:
+                    preview_text.insert("end", f"- {e}\n")
+            if target_warnings:
+                preview_text.insert("end", "\nПредупреждения целевого профиля:\n")
+                for w in target_warnings:
+                    preview_text.insert("end", f"- {w}\n")
+            if target_errors:
+                preview_text.insert("end", "\nОшибки целевого профиля:\n")
+                for e in target_errors:
+                    preview_text.insert("end", f"- {e}\n")
+            preview_text.configure(state="disabled")
+
+        def _apply():
+            selected_name = profile_var.get()
+            target = profile_map[selected_name]
+            changes = manager.preview_profile_change(target)
+            if not changes:
+                messagebox.showinfo("Профили безопасности", "Профиль уже активен.", parent=dialog)
+                return
+            if not messagebox.askyesno(
+                "Применить профиль",
+                f"Применить профиль «{selected_name}»?\n\nИзменений: {len(changes)}",
+                parent=dialog,
+            ):
+                return
+
+            result = manager.apply_profile(target)
+            if not result.success:
+                messagebox.showerror(
+                    "Профили безопасности",
+                    "\n".join(result.errors) or "Не удалось применить профиль.",
+                    parent=dialog,
+                )
+                return
+
+            cfg = SecurityHardeningSettings.from_settings(self.settings_service)
+            self._apply_hardening_runtime(cfg)
+            info.config(text=f"Текущий профиль: {self._format_profile_name(target)}")
+            self.set_status(f"Применен профиль безопасности: {selected_name}")
+
+            if result.warnings:
+                messagebox.showwarning(
+                    "Профиль применен с предупреждениями",
+                    "\n".join(result.warnings),
+                    parent=dialog,
+                )
+            else:
+                messagebox.showinfo(
+                    "Профили безопасности",
+                    f"Профиль «{selected_name}» успешно применен.",
+                    parent=dialog,
+                )
+            _render_preview()
+
+        apply_btn = self._make_canvas_button(
+            btn_row,
+            "Применить",
+            _apply,
+            accent=True,
+            width=130,
+            height=36,
+            canvas_bg="#16141d",
+        )
+        apply_btn.pack(side="left")
+
+        refresh_btn = self._make_canvas_button(
+            btn_row,
+            "Обновить",
+            _render_preview,
+            width=130,
+            height=36,
+            canvas_bg="#16141d",
+        )
+        refresh_btn.pack(side="left", padx=10)
+
+        close_btn = self._make_canvas_button(
+            btn_row,
+            "Закрыть",
+            dialog.destroy,
+            width=130,
+            height=36,
+            canvas_bg="#16141d",
+        )
+        close_btn.pack(side="right")
+
+        profile_combo.bind("<<ComboboxSelected>>", lambda _e: _render_preview())
+        _render_preview()
 
     def get_selected_id(self):
         if self.locked:
@@ -1355,14 +1731,6 @@ class MainWindow(tk.Tk):
             self.vault_service.delete_entry(int(entry_id))
 
         self.load_entries()
-        if self._panic_snapshot:
-            try:
-                if self._panic_snapshot.get("geometry"):
-                    self.geometry(self._panic_snapshot["geometry"])
-                self.search_var.set(self._panic_snapshot.get("search_query", ""))
-            except Exception:
-                pass
-            self._panic_snapshot = None
         self.set_status("Записи удалены")
 
     def _copy_username_from_table(self, entry_id: str):
@@ -1581,12 +1949,12 @@ class MainWindow(tk.Tk):
         self.load_entries()
         self.set_status("Записи удалены")
 
-    def apply_locked_state(self):
+    def apply_locked_state(self, clear_clipboard: bool = True):
         self.locked = True
 
-        if hasattr(self, "clipboard_service"):
+        if clear_clipboard and hasattr(self, "clipboard_service"):
             self.clipboard_service.clear()
-        self.clipboard_preview = None
+            self.clipboard_preview = None
         self._show_lock_overlay()
         self._hide_sensitive_windows()
 
@@ -1596,8 +1964,8 @@ class MainWindow(tk.Tk):
         self.filtered_rows = []
         self.search_var.set("")
 
-        self.set_custom_button_enabled(self.btn_lock, True)
         if hasattr(self, "btn_lock"):
+            self.set_custom_button_enabled(self.btn_lock, True)
             self.btn_lock._command = self.toggle_lock_state
             self.btn_lock.itemconfig(self.btn_lock._label, text="Разблокировать")
         if hasattr(self, "btn_unlock"):
@@ -1624,7 +1992,7 @@ class MainWindow(tk.Tk):
             self.tray.set_locked(True)
             self.tray.set_crypto_busy(False)
             self.tray.set_clipboard_active(False)
-            self.tray.notify("CryptoSafe", "Vault locked")
+            self.tray.notify("CryptoSafe", "Хранилище заблокировано")
 
     def apply_unlocked_state(self):
         self.locked = False
@@ -1632,8 +2000,8 @@ class MainWindow(tk.Tk):
         if self.event_bus:
             self.event_bus.publish(VaultUnlocked(user="local"))
 
-        self.set_custom_button_enabled(self.btn_lock, True)
         if hasattr(self, "btn_lock"):
+            self.set_custom_button_enabled(self.btn_lock, True)
             self.btn_lock._command = self.toggle_lock_state
             self.btn_lock.itemconfig(self.btn_lock._label, text="Заблокировать")
         if hasattr(self, "btn_unlock"):
@@ -1655,12 +2023,40 @@ class MainWindow(tk.Tk):
             self.set_custom_button_enabled(self.sidebar_unlock_btn, False)
 
         self.load_entries()
+        self._restore_panic_snapshot_if_any()
         self.set_status("Хранилище разблокировано")
         self.update_window_title()
         if self.tray and self.tray.enabled:
             self.tray.set_locked(False)
             self.tray.set_crypto_busy(False)
-            self.tray.notify("CryptoSafe", "Vault unlocked")
+            self.tray.notify("CryptoSafe", "Хранилище разблокировано")
+
+    def _restore_panic_snapshot_if_any(self):
+        if not self._panic_snapshot:
+            return
+        try:
+            geometry = self._panic_snapshot.get("geometry")
+            if geometry:
+                self.geometry(geometry)
+
+            previous_state = self._panic_snapshot.get("state")
+            if previous_state in {"normal", "zoomed"}:
+                try:
+                    self.state(previous_state)
+                except Exception:
+                    pass
+
+            query = self._panic_snapshot.get("search_query", "")
+            self.search_var.set(query)
+
+            selected_entry_id = self._panic_snapshot.get("selected_entry_id")
+            if selected_entry_id:
+                try:
+                    self._select_table_entry(int(selected_entry_id))
+                except Exception:
+                    pass
+        finally:
+            self._panic_snapshot = None
 
     def toggle_lock_state(self):
         if self.locked:
@@ -1684,6 +2080,9 @@ class MainWindow(tk.Tk):
         if not self.auth_service:
             messagebox.showerror("Ошибка", "Сервис аутентификации не подключён", parent=self)
             return
+        if self.auth_service.is_unlocked():
+            self.apply_unlocked_state()
+            return
 
         dlg = LoginDialog(self, self.auth_service)
         self.wait_window(dlg)
@@ -1697,6 +2096,11 @@ class MainWindow(tk.Tk):
                 )
                 self._lock_and_scrub(reason="session_integrity_failed")
                 return
+            if self._focus_out_job is not None:
+                self.after_cancel(self._focus_out_job)
+                self._focus_out_job = None
+            self._has_focus = True
+            self._ignore_focus_loss_until = time.time() + 1.0
             self.apply_unlocked_state()
         else:
             self.apply_locked_state()
@@ -1709,7 +2113,12 @@ class MainWindow(tk.Tk):
                 self.auth_service.auto_lock(reason)
             except Exception:
                 pass
-        self.apply_locked_state()
+        preserve_clipboard_on_focus_lock = (
+            reason in {"focus_lost", "minimized"}
+            and hasattr(self, "clipboard_service")
+            and self.clipboard_service.clear_after_seconds is None
+        )
+        self.apply_locked_state(clear_clipboard=not preserve_clipboard_on_focus_lock)
 
     def _show_lock_overlay(self):
         return
@@ -1745,7 +2154,167 @@ class MainWindow(tk.Tk):
         self.bind_all("<Control-e>", lambda event: self.edit_record(), add="+")
         self.bind_all("<Delete>", lambda event: self.delete_record(), add="+")
         self.bind_all("<Control-l>", lambda event: self.lock_vault(), add="+")
-        self.bind_all("<Return>", lambda event: self.edit_record(), add="+")
+        self.bind_all("<Control-o>", lambda event: self.open_import_export_dialog(), add="+")
+        self.bind_all("<Control-q>", lambda event: self.open_qr_exchange(), add="+")
+        self.bind_all("<Control-g>", lambda event: self.open_audit_log(), add="+")
+        self.bind_all("<Control-comma>", lambda event: self.open_clipboard_settings(), add="+")
+        self.bind_all("<F1>", lambda event: self.show_hotkeys_help(), add="+")
+        self.bind_all("<Escape>", self._handle_escape_key, add="+")
+
+    def _handle_escape_key(self, _event=None):
+        focused = self.focus_get()
+        toplevel = focused.winfo_toplevel() if focused is not None else None
+        if isinstance(toplevel, tk.Toplevel) and toplevel is not self:
+            try:
+                toplevel.destroy()
+            except Exception:
+                pass
+            return
+        self.confirm_and_close()
+
+    def confirm_and_close(self):
+        if not messagebox.askyesno(
+            "Выход",
+            "Полностью закрыть приложение?",
+            parent=self,
+        ):
+            return
+        self.on_close()
+
+    def open_audit_log(self):
+        self._open_singleton_window(
+            "audit_log",
+            lambda: AuditLogViewer(self, db=self.db, signer=getattr(self.audit_logger, "signer", None)),
+        )
+
+    def show_hotkeys_help(self):
+        existing = self._get_open_child_window("hotkeys_help")
+        if existing:
+            self._focus_child_window(existing)
+            return
+        dialog = tk.Toplevel(self)
+        self._register_child_window("hotkeys_help", dialog)
+        dialog.title("Горячие клавиши")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.configure(bg="#15121d")
+        dialog.geometry("700x540")
+        dialog.minsize(620, 460)
+
+        root = tk.Frame(dialog, bg="#15121d", padx=18, pady=16)
+        root.pack(fill="both", expand=True)
+        root.grid_rowconfigure(1, weight=1)
+        root.grid_columnconfigure(0, weight=1)
+
+        tk.Label(
+            root,
+            text="Горячие клавиши",
+            bg="#15121d",
+            fg="#f3e8ff",
+            font=("Arial", 17, "bold"),
+        ).grid(row=0, column=0, sticky="w", pady=(0, 10))
+
+        wrap = tk.Frame(root, bg="#15121d")
+        wrap.grid(row=1, column=0, sticky="nsew")
+        wrap.grid_rowconfigure(0, weight=1)
+        wrap.grid_columnconfigure(0, weight=1)
+
+        text = tk.Text(
+            wrap,
+            bg="#1f1830",
+            fg="#f5f3ff",
+            insertbackground="#f5f3ff",
+            relief="flat",
+            bd=0,
+            padx=14,
+            pady=12,
+            font=("Consolas", 11),
+            wrap="word",
+        )
+        text.grid(row=0, column=0, sticky="nsew")
+
+        scroll = ttk.Scrollbar(wrap, orient="vertical", style="Vertical.TScrollbar", command=text.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        text.configure(yscrollcommand=scroll.set)
+
+        lines = [
+            "Навигация и записи",
+            "  Ctrl+F        — Поиск",
+            "  Ctrl+N        — Добавить запись",
+            "  Ctrl+E        — Редактировать выбранную запись",
+            "  Delete        — Удалить выбранную запись",
+            "",
+            "Безопасность",
+            "  Ctrl+L        — Заблокировать хранилище",
+            "  Ctrl+Shift+P  — Показать / скрыть пароли",
+            "  Ctrl+Shift+Esc— Panic mode",
+            "",
+            "Инструменты",
+            "  Ctrl+O        — Импорт / Экспорт",
+            "  Ctrl+Q        — QR обмен",
+            "  Ctrl+G        — Журнал аудита",
+            "  Ctrl+,        — Настройки буфера обмена",
+            "",
+            "Справка",
+            "  F1            — Это окно горячих клавиш",
+            "",
+            "Диалоги",
+            "  Enter         — Подтверждение в окне входа",
+            "  Esc           — Закрыть диалог",
+        ]
+        text.insert("1.0", "\n".join(lines))
+        text.configure(state="disabled")
+
+        close_btn = self._make_canvas_button(
+            root,
+            "Закрыть",
+            dialog.destroy,
+            width=130,
+            height=36,
+            canvas_bg="#15121d",
+        )
+        close_btn.grid(row=2, column=0, sticky="e", pady=(12, 0))
+
+    def _focus_child_window(self, window: tk.Toplevel):
+        try:
+            window.deiconify()
+            window.lift()
+            window.focus_force()
+        except Exception:
+            pass
+
+    def _register_child_window(self, key: str, window: tk.Toplevel):
+        self._child_windows[key] = window
+
+        def _cleanup(_event=None):
+            if self._child_windows.get(key) is window:
+                self._child_windows.pop(key, None)
+
+        window.bind("<Destroy>", _cleanup, add="+")
+
+    def _get_open_child_window(self, key: str):
+        window = self._child_windows.get(key)
+        if window is None:
+            return None
+        try:
+            if not window.winfo_exists():
+                self._child_windows.pop(key, None)
+                return None
+        except Exception:
+            self._child_windows.pop(key, None)
+            return None
+        return window
+
+    def _open_singleton_window(self, key: str, factory):
+        existing = self._get_open_child_window(key)
+        if existing:
+            self._focus_child_window(existing)
+            return existing
+        window = factory()
+        if isinstance(window, tk.Toplevel):
+            self._register_child_window(key, window)
+            self._focus_child_window(window)
+        return window
 
     def _mark_activity(self, event=None):
         if self.auth_service and self.auth_service.is_unlocked():
@@ -1789,9 +2358,10 @@ class MainWindow(tk.Tk):
 
     def _handle_real_focus_loss(self):
         self._focus_out_job = None
+        if time.time() < self._ignore_focus_loss_until:
+            return
 
-        current = self.focus_displayof()
-        if current is not None:
+        if self._has_internal_focus():
             return
 
         if not self._has_focus:
@@ -1801,7 +2371,33 @@ class MainWindow(tk.Tk):
 
         if self.auth_service and self.auth_service.is_unlocked():
             self.auth_service.on_app_focus_lost()
-            self._lock_and_scrub(reason="focus_lost")
+            if not self.auth_service.is_unlocked():
+                self._lock_and_scrub(reason="focus_lost")
+
+    def _has_internal_focus(self) -> bool:
+        try:
+            focused = self.focus_get()
+            if focused is not None:
+                return True
+        except Exception:
+            pass
+
+        try:
+            grabbed = self.grab_current()
+            if grabbed is not None:
+                return True
+        except Exception:
+            pass
+
+        for child in self.winfo_children():
+            if isinstance(child, tk.Toplevel):
+                try:
+                    if child.winfo_exists() and child.focus_displayof() is not None:
+                        return True
+                except Exception:
+                    pass
+
+        return False
 
     def _on_focus_in(self, event=None):
         if not self._has_focus:
@@ -1819,7 +2415,8 @@ class MainWindow(tk.Tk):
 
         if self.auth_service and self.auth_service.is_unlocked():
             self.auth_service.on_app_minimized()
-            self._lock_and_scrub(reason="minimized")
+            if not self.auth_service.is_unlocked():
+                self._lock_and_scrub(reason="minimized")
 
     def _on_map(self, event=None):
         if self._is_minimized:
@@ -1830,6 +2427,8 @@ class MainWindow(tk.Tk):
                 self.auth_service.touch()
 
     def _poll_session_state(self):
+        if self._is_closing:
+            return
         try:
             if self.tray and self.tray.enabled and hasattr(self, "clipboard_service"):
                 self.tray.set_clipboard_active(self.clipboard_service.has_active_secret())
@@ -1837,9 +2436,31 @@ class MainWindow(tk.Tk):
                 self.apply_locked_state()
                 return
         finally:
-            self.after(1000, self._poll_session_state)
+            if not self._is_closing:
+                self._poll_job = self.after(1000, self._poll_session_state)
 
     def on_close(self):
+        if self._is_closing:
+            return
+        self._is_closing = True
+
+        if hasattr(self, "tray") and self.tray:
+            try:
+                self.tray.stop()
+            except Exception:
+                pass
+
+        if getattr(self, "_poll_job", None) is not None:
+            try:
+                self.after_cancel(self._poll_job)
+            except Exception:
+                pass
+            self._poll_job = None
+
+        if self._hardware_token_job is not None:
+            self.after_cancel(self._hardware_token_job)
+            self._hardware_token_job = None
+
         if self._audit_verification_job is not None:
             self.after_cancel(self._audit_verification_job)
             self._audit_verification_job = None
@@ -1862,18 +2483,61 @@ class MainWindow(tk.Tk):
         if hasattr(self.db, "close_thread_connection"):
             self.db.close_thread_connection()
 
-        if hasattr(self, "tray") and self.tray:
-            self.tray.stop()
+        if self.event_bus and hasattr(self.event_bus, "shutdown"):
+            try:
+                self.event_bus.shutdown(wait=False)
+            except Exception:
+                pass
 
-        self.destroy()
+        self.after_idle(self.destroy)
+
+    def _schedule_hardware_token_poll(self):
+        self._hardware_token_job = self.after(1200, self._poll_hardware_token_trigger)
+
+    def _poll_hardware_token_trigger(self):
+        try:
+            enabled = str(
+                self.db.get_setting("security.hardening.panic_mode.hardware_token.enabled", "false")
+            ).strip().lower() in {"1", "true", "yes", "on"}
+            if not enabled:
+                return
+
+            token_file = str(
+                self.db.get_setting(
+                    "security.hardening.panic_mode.hardware_token.token_file",
+                    "/Volumes/CRYPTOSAFE_PANIC/.panic",
+                )
+                or ""
+            ).strip()
+
+            if not token_file:
+                return
+
+            import os
+            if os.path.exists(token_file):
+                try:
+                    os.remove(token_file)
+                except Exception:
+                    pass
+                self.activate_panic_mode("hardware_token")
+        finally:
+            self._schedule_hardware_token_poll()
 
     def _on_clipboard_state_changed(self, state: str):
+        if threading.current_thread() is not threading.main_thread():
+            try:
+                self.after(0, lambda s=state: self._on_clipboard_state_changed(s))
+            except tk.TclError:
+                pass
+            return
+
         if state == "copied":
             self.start_clipboard_countdown()
 
         elif state == "cleared":
             self.stop_clipboard_countdown()
             self.table.set_clipboard_entry(None)
+            self.clipboard_preview = None
             self.show_toast("Буфер обмена очищен")
             self.set_status("Буфер обмена очищен.")
 
@@ -2086,11 +2750,14 @@ class MainWindow(tk.Tk):
             messagebox.showwarning("Хранилище заблокировано", "Сначала разблокируй хранилище", parent=self)
             return
 
-        QrExchangeWindow(
-            self,
-            db=self.db,
-            vault_service=self.vault_service,
-            key_manager=self.key_manager,
+        self._open_singleton_window(
+            "qr_exchange",
+            lambda: QrExchangeWindow(
+                self,
+                db=self.db,
+                vault_service=self.vault_service,
+                key_manager=self.key_manager,
+            ),
         )
 
     def open_import_export_dialog(self):
@@ -2098,12 +2765,15 @@ class MainWindow(tk.Tk):
             messagebox.showwarning("Хранилище заблокировано", "Сначала разблокируй хранилище", parent=self)
             return
 
-        ImportExportDialog(
-            self,
-            db=self.db,
-            vault_service=self.vault_service,
-            key_manager=self.key_manager,
-            event_bus=self.event_bus,
+        self._open_singleton_window(
+            "import_export",
+            lambda: ImportExportDialog(
+                self,
+                db=self.db,
+                vault_service=self.vault_service,
+                key_manager=self.key_manager,
+                event_bus=self.event_bus,
+            ),
         )
 
     def show_security_diagnostics(self):

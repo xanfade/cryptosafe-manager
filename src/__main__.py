@@ -94,6 +94,14 @@ def main():
         settings_service.set("ui.tray.start_minimized", "false", encrypted=False)
     if settings_service.get("security.platform.strict") is None:
         settings_service.set("security.platform.strict", "true", encrypted=False)
+    if settings_service.get("security.hardening.panic_mode.hardware_token.enabled") is None:
+        settings_service.set("security.hardening.panic_mode.hardware_token.enabled", "false", encrypted=False)
+    if settings_service.get("security.hardening.panic_mode.hardware_token.token_file") is None:
+        settings_service.set(
+            "security.hardening.panic_mode.hardware_token.token_file",
+            "/Volumes/CRYPTOSAFE_PANIC/.panic",
+            encrypted=False,
+        )
 
     # Keep the legacy key for backward compatibility with existing deployments.
     if settings_service.get("security.auto_lock_timeout_sec") is None:
@@ -184,6 +192,7 @@ def main():
         auth_service=auth_service,
         event_bus=event_bus,
         audit_logger=audit_logger,
+        settings_service=settings_service,
         start_minimized_to_tray=str(settings_service.get("ui.tray.start_minimized", "false")).lower() in {"1", "true", "yes", "on"},
     )
     app.mainloop()

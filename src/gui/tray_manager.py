@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import threading
+import time
 from typing import Callable
 
 try:
@@ -17,6 +19,7 @@ class TrayState:
     locked: bool = True
     crypto_busy: bool = False
     clipboard_active: bool = False
+    security_level: str = "advanced"
 
 
 class TrayController:
@@ -49,6 +52,8 @@ class TrayController:
         self.state = TrayState()
         self._icon = None
         self._anim_phase = 0
+        self._anim_thread = None
+        self._anim_running = False
 
     @property
     def enabled(self) -> bool:
@@ -64,6 +69,7 @@ class TrayController:
         return True
 
     def stop(self) -> None:
+        self._stop_animation()
         if self._icon is not None:
             try:
                 self._icon.stop()
@@ -75,12 +81,25 @@ class TrayController:
         self._refresh_icon()
 
     def set_crypto_busy(self, busy: bool) -> None:
-        self.state.crypto_busy = bool(busy)
-        self._anim_phase = (self._anim_phase + 1) % 4
+        busy = bool(busy)
+        if self.state.crypto_busy == busy:
+            return
+        self.state.crypto_busy = busy
+        if busy:
+            self._start_animation()
+        else:
+            self._stop_animation()
         self._refresh_icon()
 
     def set_clipboard_active(self, active: bool) -> None:
         self.state.clipboard_active = bool(active)
+        self._refresh_icon()
+
+    def set_security_level(self, level: str) -> None:
+        level = str(level or "advanced").lower()
+        if level not in {"basic", "advanced", "paranoid"}:
+            level = "advanced"
+        self.state.security_level = level
         self._refresh_icon()
 
     def notify(self, title: str, message: str) -> None:
@@ -105,7 +124,12 @@ class TrayController:
         if self.state.locked:
             color = (220, 38, 38, 255)
         else:
-            color = (34, 197, 94, 255)
+            if self.state.security_level == "basic":
+                color = (34, 197, 94, 255)
+            elif self.state.security_level == "advanced":
+                color = (59, 130, 246, 255)
+            else:
+                color = (124, 58, 237, 255)
         if self.state.crypto_busy:
             # Animated yellow ring phase.
             ring = [(6 + self._anim_phase, 6 + self._anim_phase), (58 - self._anim_phase, 58 - self._anim_phase)]
@@ -114,10 +138,12 @@ class TrayController:
         return image
 
     def _title_status(self) -> str:
-        state = "Locked" if self.state.locked else "Unlocked"
-        clip = "Clipboard Active" if self.state.clipboard_active else "Clipboard Empty"
-        busy = "Crypto Busy" if self.state.crypto_busy else "Idle"
-        return f"{self._title} | {state} | {clip} | {busy}"
+        state = "Заблокировано" if self.state.locked else "Разблокировано"
+        clip = "Буфер: активен" if self.state.clipboard_active else "Буфер: пуст"
+        busy = "Крипто: занято" if self.state.crypto_busy else "Крипто: ожидание"
+        level_map = {"basic": "Базовый", "advanced": "Продвинутый", "paranoid": "Параноидальный"}
+        level = level_map.get(self.state.security_level, "Продвинутый")
+        return f"{self._title} | {state} | Уровень: {level} | {clip} | {busy}"
 
     def _wrap_callback(self, key: str):
         def _handler(icon=None, item=None):
@@ -128,20 +154,45 @@ class TrayController:
 
     def _build_menu(self):
         return pystray.Menu(
-            pystray.MenuItem("Show Window", self._wrap_callback("show")),
+            pystray.MenuItem("Показать окно", self._wrap_callback("show")),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Lock Vault", self._wrap_callback("lock")),
-            pystray.MenuItem("Unlock Vault", self._wrap_callback("unlock")),
+            pystray.MenuItem("Заблокировать хранилище", self._wrap_callback("lock")),
+            pystray.MenuItem("Разблокировать хранилище", self._wrap_callback("unlock")),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Quick Search...", self._wrap_callback("quick_search")),
+            pystray.MenuItem("Быстрый поиск...", self._wrap_callback("quick_search")),
             pystray.MenuItem(
-                lambda _item: f"Clipboard: {'Active' if self.state.clipboard_active else 'Empty'}",
+                lambda _item: f"Буфер: {'активен' if self.state.clipboard_active else 'пуст'}",
                 lambda icon, item: None,
                 enabled=False,
             ),
-            pystray.MenuItem("Clear Clipboard", self._wrap_callback("clear_clipboard")),
+            pystray.MenuItem(
+                lambda _item: f"Уровень безопасности: { {'basic': 'Базовый', 'advanced': 'Продвинутый', 'paranoid': 'Параноидальный'}.get(self.state.security_level, 'Продвинутый') }",
+                lambda icon, item: None,
+                enabled=False,
+            ),
+            pystray.MenuItem("Очистить буфер", self._wrap_callback("clear_clipboard")),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Panic Mode", self._wrap_callback("panic_mode")),
-            pystray.MenuItem("Settings", self._wrap_callback("settings")),
-            pystray.MenuItem("Exit", self._wrap_callback("exit")),
+            pystray.MenuItem("Режим паники", self._wrap_callback("panic_mode")),
+            pystray.MenuItem("Настройки", self._wrap_callback("settings")),
+            pystray.MenuItem("Выход", self._wrap_callback("exit")),
         )
+
+    def _start_animation(self) -> None:
+        if self._anim_running:
+            return
+        self._anim_running = True
+
+        def _loop():
+            while self._anim_running:
+                self._anim_phase = (self._anim_phase + 1) % 4
+                try:
+                    self._refresh_icon()
+                except Exception:
+                    pass
+                time.sleep(0.35)
+
+        self._anim_thread = threading.Thread(target=_loop, daemon=True)
+        self._anim_thread.start()
+
+    def _stop_animation(self) -> None:
+        self._anim_running = False
