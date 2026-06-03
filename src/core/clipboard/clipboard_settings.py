@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
@@ -135,10 +134,8 @@ def normalize_application_id(value: str) -> str:
 
     text = text.replace("\\", "/")
     text = text.rstrip("/")
+    # Keep concrete process identity (executable/bundle id token) rather than
+    # stripping extensions to a generic app name.
     name = text.split("/")[-1]
-    if name.lower().endswith(".app"):
-        name = name[:-4]
-    if name.lower().endswith(".exe"):
-        name = name[:-4]
     name = re.sub(r"\s+", " ", name).strip().lower()
-    return os.path.splitext(name)[0] if "." in name and not name.startswith(".") else name
+    return name

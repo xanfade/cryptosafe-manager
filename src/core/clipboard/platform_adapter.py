@@ -90,48 +90,32 @@ class WindowsClipboardAdapter(ClipboardAdapter):
 
 
 class MacOSClipboardAdapter(ClipboardAdapter):
-
-
-    def __init__(self) -> None:
-        appkit: Any = importlib.import_module("AppKit")
-
-        self.NSPasteboard = appkit.NSPasteboard
-        self.NSPasteboardNameGeneral = appkit.NSPasteboardNameGeneral
-        self.NSPasteboardTypeString = appkit.NSPasteboardTypeString
-
-    def _pasteboard(self):
-        return self.NSPasteboard.pasteboardWithName_(
-            self.NSPasteboardNameGeneral
-        )
+    """
+    Uses native CLI tools instead of AppKit calls, so clipboard access remains
+    stable from background threads (monitor/timers) on macOS.
+    """
 
     def set_text(self, value: str) -> None:
-        pasteboard = self._pasteboard()
-        pasteboard.clearContents()
-        pasteboard.declareTypes_owner_(
-            [self.NSPasteboardTypeString],
-            None,
-        )
-        pasteboard.setString_forType_(
-            value,
-            self.NSPasteboardTypeString,
+        subprocess.run(
+            ["pbcopy"],
+            input=value.encode("utf-8"),
+            check=False,
         )
 
     def get_text(self) -> str:
-        value = self._pasteboard().stringForType_(
-            self.NSPasteboardTypeString
+        result = subprocess.run(
+            ["pbpaste"],
+            capture_output=True,
+            text=True,
+            check=False,
         )
-        return value or ""
+        return result.stdout or ""
 
     def clear(self) -> None:
-        self._pasteboard().clearContents()
+        self.set_text("")
 
     def active_application_id(self) -> str:
-        try:
-            appkit: Any = importlib.import_module("AppKit")
-            app = appkit.NSWorkspace.sharedWorkspace().frontmostApplication()
-            return str(app.localizedName() or app.bundleIdentifier() or "")
-        except Exception:
-            return ""
+        return ""
 
 
 class LinuxClipboardAdapter(ClipboardAdapter):

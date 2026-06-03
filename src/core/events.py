@@ -222,3 +222,10 @@ class EventBus:
         self._futures = []
         for future in futures:
             future.result(timeout=timeout)
+
+    def shutdown(self, wait: bool = True) -> None:
+        try:
+            self.drain_async(timeout=1.0 if wait else 0.0)
+        except Exception:
+            pass
+        self._pool.shutdown(wait=wait, cancel_futures=True)

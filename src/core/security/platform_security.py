@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import os
 import platform
+import sys
 from dataclasses import dataclass
 
 
@@ -17,6 +18,7 @@ class PlatformCapabilities:
     touch_id: bool = False  # bonus
     keychain_services: bool = False
     gatekeeper_notarization: bool = False
+    packaged_app: bool = False
     # Linux
     kernel_keyring: bool = False
     systemd_integration: bool = False
@@ -41,6 +43,7 @@ class PlatformSecurityManager:
 
         if name == "Darwin":
             caps.keychain_services = True
+            caps.packaged_app = bool(getattr(sys, "frozen", False))
             caps.gatekeeper_notarization = bool(os.environ.get("APP_NOTARIZED", "").lower() in {"1", "true", "yes"})
             caps.touch_id = False
             return caps
@@ -70,7 +73,8 @@ class PlatformSecurityManager:
         if caps.platform_name == "Darwin":
             if not caps.keychain_services:
                 errors.append("macOS Keychain Services are unavailable.")
-            if not caps.gatekeeper_notarization:
+            # Notarization is enforced only for packaged app distributions.
+            if caps.packaged_app and not caps.gatekeeper_notarization:
                 errors.append("Gatekeeper notarization is not confirmed.")
             if not caps.touch_id:
                 warnings.append("Touch ID integration is unavailable (bonus).")

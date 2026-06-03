@@ -142,7 +142,7 @@ class ClipboardService:
                 self._notify("copy_blocked")
                 return
 
-            self.clear(publish_event=False)
+            self.clear(publish_event=False, notify=False)
 
             self.adapter.set_text(clipboard_value)
 
@@ -253,7 +253,7 @@ class ClipboardService:
         self._timer.daemon = True
         self._timer.start()
 
-    def clear(self, publish_event: bool = True) -> None:
+    def clear(self, publish_event: bool = True, notify: bool = True) -> None:
         with self._lock:
             if self._timer:
                 self._timer.cancel()
@@ -278,7 +278,8 @@ class ClipboardService:
             if publish_event:
                 self.event_bus.publish(ClipboardCleared())
 
-            self._notify("cleared")
+            if notify:
+                self._notify("cleared")
 
     def _auto_clear(self) -> None:
         self.clear(publish_event=False)
