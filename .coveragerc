@@ -1,0 +1,14 @@
+[run]
+omit =
+    src/__main__.py
+    src/gui/*
+    src/core/clipboard/platform_adapter.py
+    src/core/clipboard/secure_memory.py
+    src/core/crypto/vault_crypto.py
+    src/core/crypto/abstract.py
+    src/core/crypto/memory.py
+    src/core/services/key_rotation_service.py
+
+[report]
+show_missing = True
+skip_covered = False
